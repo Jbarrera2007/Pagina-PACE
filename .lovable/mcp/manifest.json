@@ -1,0 +1,238 @@
+{
+  "version": 1,
+  "sdk_version": "0.26.1",
+  "path": "/mcp",
+  "auth": {
+    "type": "oauth",
+    "issuer": "https://hpzrkppyclvrkvhongan.supabase.co/auth/v1",
+    "accepted_audiences": [
+      "authenticated"
+    ]
+  },
+  "mcp": {
+    "server": {
+      "name": "pace-intelligent-runner",
+      "version": "0.1.0",
+      "title": "PACE: Intelligent Runner"
+    },
+    "tools": [
+      {
+        "name": "get_runner_profile",
+        "title": "Get runner profile",
+        "description": "Read the signed-in runner's PACE profile: name, physiology (max HR, resting HR, VO2max), weekly target and locale.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "list_activities",
+        "title": "List activities",
+        "description": "List the signed-in runner's recent training activities with distance, time, pace, heart rate, cadence, elevation and training load.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "properties": {
+            "limit": {
+              "default": 10,
+              "description": "How many activities to return (1-50).",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            },
+            "sport_type": {
+              "description": "Optional sport filter, e.g. 'run'.",
+              "type": "string"
+            },
+            "since": {
+              "description": "Optional ISO date; only activities started on or after this date.",
+              "type": "string"
+            }
+          }
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "get_training_summary",
+        "title": "Get training summary",
+        "description": "Summarize the signed-in runner's training over a recent window: total distance, time, elevation, training load, average pace and heart rate, plus a per-week breakdown.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "properties": {
+            "days": {
+              "default": 28,
+              "description": "Window length in days (7-365).",
+              "type": "integer",
+              "minimum": 7,
+              "maximum": 365
+            }
+          }
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "list_personal_records",
+        "title": "List personal records",
+        "description": "List the signed-in runner's personal bests per distance with the date achieved.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "list_goals",
+        "title": "List goals",
+        "description": "List the signed-in runner's training goals with progress, target, unit, due date and status.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "properties": {
+            "status": {
+              "description": "Optional status filter.",
+              "type": "string",
+              "enum": [
+                "active",
+                "achieved",
+                "missed",
+                "archived"
+              ]
+            }
+          }
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "create_goal",
+        "title": "Create goal",
+        "description": "Create a new training goal for the signed-in runner (e.g. weekly volume, race time, streak).",
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Human readable goal, e.g. 'Sub 40' 10K'."
+            },
+            "goal_type": {
+              "default": "custom",
+              "description": "Goal category, e.g. 'distance', 'race_time', 'volume'.",
+              "type": "string"
+            },
+            "target_value": {
+              "description": "Numeric target value.",
+              "type": "number"
+            },
+            "unit": {
+              "description": "Unit for the target, e.g. 'km', 's', 'sessions'.",
+              "type": "string"
+            },
+            "due_date": {
+              "description": "Optional ISO date (YYYY-MM-DD) deadline.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "label"
+          ]
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "log_activity",
+        "title": "Log activity",
+        "description": "Log a manual training activity for the signed-in runner (distance, duration and optional heart rate, cadence and elevation).",
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Session name, e.g. 'Easy run'."
+            },
+            "started_at": {
+              "type": "string",
+              "description": "ISO timestamp when the session started."
+            },
+            "distance_m": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Distance in meters."
+            },
+            "moving_time_s": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "description": "Moving time in seconds."
+            },
+            "sport_type": {
+              "default": "run",
+              "description": "Sport type, defaults to 'run'.",
+              "type": "string"
+            },
+            "avg_hr": {
+              "description": "Average heart rate in bpm.",
+              "type": "number"
+            },
+            "avg_cadence": {
+              "description": "Average cadence in spm.",
+              "type": "number"
+            },
+            "elevation_gain_m": {
+              "description": "Elevation gain in meters.",
+              "type": "number"
+            }
+          },
+          "required": [
+            "name",
+            "started_at",
+            "distance_m",
+            "moving_time_s"
+          ]
+        },
+        "outputSchema": null
+      }
+    ]
+  }
+}
