@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
+import { useActivities } from "@/hooks/use-activities";
 import {
   
   Area,
@@ -142,25 +143,18 @@ function PremiumPanel({
 
 /* ------------------------------ Entrenamientos ----------------------------- */
 
-const monthlyVolume = [
-  { mes: "Feb", km: 182 },
-  { mes: "Mar", km: 214 },
-  { mes: "Abr", km: 236 },
-  { mes: "May", km: 198 },
-  { mes: "Jun", km: 251 },
-  { mes: "Jul", km: 268 },
-];
+const { activities } = useActivities();
 
-const surfaceSplit = [
-  { tipo: "Asfalto", km: 168 },
-  { tipo: "Pista", km: 42 },
-  { tipo: "Trail", km: 38 },
-  { tipo: "Cinta", km: 20 },
-];
+const surfaceSplit = [];
 
 export function TrainingsSection() {
-  const [filter, setFilter] = useState<"Todos" | "Suave" | "Moderado" | "Duro">("Todos");
-  const [list, setList] = useState<any[]>([]);
+  const { activities } = useActivities();
+
+const [filter, setFilter] = useState<
+"Todos" | "Suave" | "Moderado" | "Duro"
+>("Todos");
+
+const list = activities ?? [];
 
   useEffect(() => {
     getMyActivities().then(setList);
@@ -169,10 +163,25 @@ export function TrainingsSection() {
   return (
     <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat label="Sesiones del mes" value="24" />
-        <Stat label="Volumen del mes" value="268" unit="km" />
-        <Stat label="Desnivel acumulado" value="3 140" unit="m" />
-        <Stat label="Tiempo en movimiento" value="21:48" unit="h" />
+        <Stat label="Sesiones del mes" value={String(list.length)} />
+
+<Stat 
+  label="Volumen del mes" 
+  value="0" 
+  unit="km" 
+/>
+
+<Stat 
+  label="Desnivel acumulado" 
+  value="0" 
+  unit="m"
+/>
+
+<Stat 
+  label="Tiempo en movimiento" 
+  value="0:00" 
+  unit="h"
+/>
       </div>
 
       <WeekComparison />
@@ -270,24 +279,9 @@ export function TrainingsSection() {
 
 /* ---------------------------------- Planes --------------------------------- */
 
-const planWeeks = [
-  { semana: "S1", km: 48, calidad: 2 },
-  { semana: "S2", km: 54, calidad: 2 },
-  { semana: "S3", km: 61, calidad: 3 },
-  { semana: "S4", km: 42, calidad: 1 },
-  { semana: "S5", km: 66, calidad: 3 },
-  { semana: "S6", km: 72, calidad: 3 },
-];
+const planWeeks = [];
 
-const weekSessions = [
-  { day: "Lun", title: "Descanso activo", detail: "Movilidad 20 min" },
-  { day: "Mar", title: "Series 8 × 800 m", detail: "3:35 /km · rec 90″" },
-  { day: "Mié", title: "Rodaje suave", detail: "10 km · 5:30 /km" },
-  { day: "Jue", title: "Tempo 25 min", detail: "4:05 /km" },
-  { day: "Vie", title: "Descanso", detail: "—" },
-  { day: "Sáb", title: "Fartlek colinas", detail: "12 × 45″" },
-  { day: "Dom", title: "Tirada larga", detail: "26 km · 5:05 /km" },
-];
+const weekSessions = [];
 
 export function PlansSection() {
   return (
@@ -397,14 +391,7 @@ interface Race {
 
 const RACES_KEY = "pace:races";
 
-const defaultRaces: Race[] = [
-  { id: "r1", name: "Maratón de Valencia", date: "2026-12-07", dist: "42,2 km", goal: "Sub 2:55" },
-  { id: "r2", name: "Media de Madrid", date: "2026-10-18", dist: "21,1 km", goal: "Sub 1:20" },
-  { id: "r3", name: "10K Nocturna Bilbao", date: "2026-09-05", dist: "10 km", goal: "Sub 36:30" },
-  { id: "r4", name: "Meeting 1500 Barcelona", date: "2026-08-22", dist: "1 500 m", goal: "Sub 4:15" },
-  { id: "r5", name: "Control 800 en pista", date: "2026-08-09", dist: "800 m", goal: "Sub 2:02" },
-  { id: "r6", name: "3000 m Cto. Autonómico", date: "2026-09-12", dist: "3 000 m", goal: "Sub 9:20" },
-];
+const defaultRaces: Race[] = [];
 
 const DIST_OPTIONS = ["800 m", "1 500 m", "3 000 m", "5 km", "10 km", "21,1 km", "42,2 km"];
 
@@ -537,13 +524,7 @@ function RaceCard({
   );
 }
 
-const raceHistory = [
-  { year: "2022", tiempo: 3.35 },
-  { year: "2023", tiempo: 3.18 },
-  { year: "2024", tiempo: 3.07 },
-  { year: "2025", tiempo: 2.98 },
-  { year: "2026", tiempo: 2.91 },
-];
+const raceHistory = [];
 
 export function RacesSection() {
   const [races, setRaces] = useState<Race[]>(defaultRaces);
@@ -660,20 +641,9 @@ interface Objective {
   type: string;
 }
 
-const initialObjectives: Objective[] = [
-  { id: "o1", label: "Sub 1:20 en media maratón", progress: 72, due: "18 oct 2026", type: "Marca" },
-  { id: "o2", label: "80 km semanales", progress: 78, due: "Semanal", type: "Volumen" },
-  { id: "o3", label: "VO2 máx 60", progress: 64, due: "Dic 2026", type: "Fisiología" },
-  { id: "o4", label: "12 sesiones de fuerza", progress: 41, due: "Mensual", type: "Fuerza" },
-];
+const initialObjectives: Objective[] = [];
 
-const records = [
-  { dist: "1 K", time: "3:02", date: "12 jun 2026" },
-  { dist: "5 K", time: "17:42", date: "3 may 2026" },
-  { dist: "10 K", time: "36:58", date: "21 mar 2026" },
-  { dist: "21 K", time: "1:22:14", date: "9 feb 2026" },
-  { dist: "42 K", time: "2:54:36", date: "1 dic 2025" },
-];
+const records = [];
 
 function GoalRow({
   goal,
@@ -878,13 +848,7 @@ export function CalculatorsSection() {
   const speed = total > 0 && distN > 0 ? ((distN / total) * 3600).toFixed(2) : "—";
 
 
-  const zones = [
-    { z: "Z1 Recuperación", lo: 0.5, hi: 0.6 },
-    { z: "Z2 Aeróbico", lo: 0.6, hi: 0.7 },
-    { z: "Z3 Tempo", lo: 0.7, hi: 0.8 },
-    { z: "Z4 Umbral", lo: 0.8, hi: 0.9 },
-    { z: "Z5 VO2 máx", lo: 0.9, hi: 1 },
-  ];
+  const zones = [];
 
   const inputCls =
     "w-full rounded-xl border border-border bg-background/60 px-3 py-2.5 text-sm outline-none transition-colors focus:border-primary";
@@ -976,33 +940,18 @@ export function CalculatorsSection() {
 
 /* -------------------------------- Estadísticas ------------------------------ */
 
-const radarData = [
-  { skill: "Resistencia", valor: 88 },
-  { skill: "Velocidad", valor: 71 },
-  { skill: "Umbral", valor: 82 },
-  { skill: "Economía", valor: 76 },
-  { skill: "Fuerza", valor: 58 },
-  { skill: "Recuperación", valor: 84 },
-];
+const radarData = [];
 
-const yearly = [
-  { mes: "Ene", km: 165, elev: 1200 },
-  { mes: "Feb", km: 182, elev: 1450 },
-  { mes: "Mar", km: 214, elev: 1810 },
-  { mes: "Abr", km: 236, elev: 2050 },
-  { mes: "May", km: 198, elev: 1620 },
-  { mes: "Jun", km: 251, elev: 2380 },
-  { mes: "Jul", km: 268, elev: 3140 },
-];
+const yearly = [];
 
 export function StatsSection() {
   return (
     <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat label="Total 2026" value="1 514" unit="km" />
-        <Stat label="Desnivel total" value="13 650" unit="m" />
-        <Stat label="Sesiones" value="168" />
-        <Stat label="Horas corriendo" value="126" unit="h" />
+        <Stat label="Total 2026" value="0" unit="km" />
+<Stat label="Desnivel total" value="0" unit="m" />
+<Stat label="Sesiones" value={String(list?.length ?? activities?.length ?? 0)} />
+<Stat label="Horas corriendo" value="0" unit="h" />
       </div>
 
       <WeekComparison />
@@ -1103,16 +1052,9 @@ export function ProfileSection({ name, email }: { name: string; email: string })
   const { tier } = usePlanTier();
   const isFree = tier === "free";
   const fields = [
-    { label: "Nombre", value: name },
-    { label: "Email", value: email },
-    { label: "Ciudad", value: "Madrid, España" },
-    { label: "Peso", value: "68 kg" },
-    { label: "Altura", value: "178 cm" },
-    { label: "FC máx", value: "190 bpm" },
-    { label: "FC reposo", value: "42 bpm" },
-    { label: "VO2 máx", value: "58,3 ml/kg" },
+  { label:"Nombre", value:name },
+  { label:"Email", value:email },
   ];
-
   const perks: Record<string, string[]> = {
     free: ["Métricas básicas", "Runner IQ y consistencia", "30 días de histórico"],
     pro: ["IA Coach ilimitado", "Planes adaptativos", "Predicciones avanzadas"],
