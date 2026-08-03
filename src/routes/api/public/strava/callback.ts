@@ -60,8 +60,9 @@ export const Route = createFileRoute("/api/public/strava/callback")({
         try {
           await importStravaActivities(userId, token.access_token);
         } catch (err) {
-          console.error(err);
-        }
+  console.error("Strava import error:", err);
+  return back("import_error");
+}
 
         return back("ok");
       },
