@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
 import {
+  
   Area,
   AreaChart,
   Bar,
@@ -35,7 +36,6 @@ import {
   Trophy,
   Zap,
 } from "lucide-react";
-import { trainingPlans } from "@/lib/pace-data";
 import { useWorkouts } from "@/hooks/useWorkouts";import { WeekComparison } from "@/components/dashboard/week-compare";
 import { StravaConnect } from "@/components/dashboard/strava-connect";
 import {
@@ -160,10 +160,11 @@ const surfaceSplit = [
 
 export function TrainingsSection() {
   const [filter, setFilter] = useState<"Todos" | "Suave" | "Moderado" | "Duro">("Todos");
-  const list = useMemo(
-    () => recentWorkouts.filter((w) => filter === "Todos" || w.effort === filter),
-    [filter],
-  );
+  const [list, setList] = useState<any[]>([]);
+
+  useEffect(() => {
+    getMyActivities().then(setList);
+  }, []);
 
   return (
     <div className="space-y-3">
@@ -315,17 +316,36 @@ export function PlansSection() {
 
         <Panel title="Planes disponibles">
           <div className="space-y-2">
-            {trainingPlans.map((p) => (
-              <div key={p.name} className="rounded-2xl border border-border p-4">
-                <div className="flex items-center gap-2">
-                  <CalendarRange className="size-4 text-primary" />
-                  <p className="text-sm font-medium">{p.name}</p>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {p.weeks} semanas · {p.sessions} sesiones/sem · {p.level}
-                </p>
-              </div>
-            ))}
+            {[
+  {
+    name: "Media maratón sub 1:20",
+    weeks: 12,
+    sessions: 5,
+    level: "Avanzado",
+  },
+  {
+    name: "Maratón sub 3h",
+    weeks: 18,
+    sessions: 6,
+    level: "Avanzado",
+  },
+  {
+    name: "Mejora 5K",
+    weeks: 10,
+    sessions: 4,
+    level: "Intermedio",
+  },
+].map((p) => (
+  <div key={p.name} className="rounded-2xl border border-border p-4">
+    <div className="flex items-center gap-2">
+      <CalendarRange className="size-4 text-primary" />
+      <p className="text-sm font-medium">{p.name}</p>
+    </div>
+    <p className="mt-1 text-xs text-muted-foreground">
+      {p.weeks} semanas · {p.sessions} sesiones/sem · {p.level}
+    </p>
+  </div>
+))}
           </div>
         </Panel>
       </div>
