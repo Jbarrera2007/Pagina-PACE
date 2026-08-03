@@ -143,22 +143,18 @@ function PremiumPanel({
 
 /* ------------------------------ Entrenamientos ----------------------------- */
 
-const { activities } = useActivities();
-
 const surfaceSplit = [];
 
 export function TrainingsSection() {
   const { activities } = useActivities();
 
-const [filter, setFilter] = useState<
-"Todos" | "Suave" | "Moderado" | "Duro"
->("Todos");
+  const [filter, setFilter] = useState<
+    "Todos" | "Suave" | "Moderado" | "Duro"
+  >("Todos");
 
 const list = activities ?? [];
 
-  useEffect(() => {
-    getMyActivities().then(setList);
-  }, []);
+
 
   return (
     <div className="space-y-3">
@@ -221,7 +217,7 @@ const list = activities ?? [];
         </Panel>
       </div>
 
-      <Panel title="Historial de sesiones" subtitle={`${list.length} resultados`}>
+      <Panel title="Historial de sesiones" subtitle={`${activities.length} resultados`}>
         <div className="mb-4 flex flex-wrap gap-2">
           {(["Todos", "Suave", "Moderado", "Duro"] as const).map((f) => (
             <button
@@ -238,7 +234,7 @@ const list = activities ?? [];
           ))}
         </div>
         <div className="divide-y divide-border">
-          {list.map((w) => (
+          {activities.map((w) => (
             <div key={w.id} className="grid grid-cols-2 gap-2 py-3 text-sm md:grid-cols-5">
               <div className="col-span-2 md:col-span-2">
                 <p className="font-medium">{w.title}</p>
