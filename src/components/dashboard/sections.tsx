@@ -28,6 +28,7 @@ import {
   Check,
   Flag,
   Globe,
+  HeartPulse,
   Lock,
   Moon,
   Mountain,
@@ -54,6 +55,193 @@ const tooltipStyle = {
   borderRadius: 12,
   fontSize: 12,
 };
+
+/* ------------------------- Modelo y utilidades de datos ------------------------- */
+
+type RawActivity = Record<string, unknown>;
+
+interface Activity {
+  id: string;
+  title: string;
+  date: string;
+  distance: string;
+  distanceKm: number;
+  pace: string;
+  hr: number | string | null;
+  movingTime: number | string | null;
+  elevation: number | string | null;
+  effort: string | null;
+  raw?: RawActivity | null;
+}
+
+const MONTH_LABELS = [
+  "Ene",
+  "Feb",
+  "Mar",
+  "Abr",
+  "May",
+  "Jun",
+  "Jul",
+  "Ago",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dic",
+];
+
+/** Convierte cualquier valor a número seguro (0 si no es válido). */
+function toNumber(value: unknown): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value.replace(",", "."));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+/** Lee un campo de la fila original de Supabase. */
+function rawField(activity: Activity, key: string): unknown {
+  const raw = activity.raw;
+  if (raw && typeof raw === "object") return (raw as RawActivity)[key];
+  return undefined;
+}
+
+/** Duración en segundos (acepta segundos o "h:mm:ss" / "mm:ss"). */
+function toSeconds(value: unknown): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value === "string" && value.includes(":")) {
+    const parts = value.split(":").map((p) => Number(p));
+    if (parts.some((p) => !Number.isFinite(p))) return 0;
+    return parts.reduce((acc, p) => acc * 60 + p, 0);
+  }
+  return toNumber(value);
+}
+
+function activityDate(activity: Activity): Date | null {
+  const started = rawField(activity, "started_at");
+  const candidates: unknown[] = [started, activity.date];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim() !== "") {
+      const d = new Date(candidate);
+      if (!Number.isNaN(d.getTime())) return d;
+    }
+  }
+  return null;
+}
+
+function activityKm(activity: Activity): number {
+  const direct = toNumber(activity.distanceKm);
+  if (direct > 0) return direct;
+  return toNumber(rawField(activity, "distance_m")) / 1000;
+}
+
+function activityElevation(activity: Activity): number {
+  const direct = toNumber(activity.elevation);
+  if (direct > 0) return direct;
+  const gain = toNumber(rawField(activity, "elevation_gain_m"));
+  if (gain > 0) return gain;
+  return toNumber(rawField(activity, "elevation_m"));
+}
+
+function activityMovingSeconds(activity: Activity): number {
+  const raw = toNumber(rawField(activity, "moving_time_s"));
+  if (raw > 0) return raw;
+  const elapsed = toNumber(rawField(activity, "elapsed_time_s"));
+  if (elapsed > 0) return elapsed;
+  return toSeconds(activity.movingTime);
+}
+
+function activityPaceSeconds(activity: Activity): number {
+  const raw = toNumber(rawField(activity, "avg_pace_s_per_km"));
+  if (raw > 0) return raw;
+  const km = activityKm(activity);
+  const seconds = activityMovingSeconds(activity);
+  return km > 0 && seconds > 0 ? seconds / km : 0;
+}
+
+function activityHr(activity: Activity): number {
+  const direct = toNumber(activity.hr);
+  if (direct > 0) return direct;
+  return toNumber(rawField(activity, "avg_hr"));
+}
+
+function activitySpeedKmh(activity: Activity): number {
+  const raw = toNumber(rawField(activity, "avg_speed_ms"));
+  if (raw > 0) return raw * 3.6;
+  const km = activityKm(activity);
+  const seconds = activityMovingSeconds(activity);
+  return km > 0 && seconds > 0 ? (km / seconds) * 3600 : 0;
+}
+
+function activitySurface(activity: Activity): string {
+  const candidates = ["surface", "terrain", "sport_type"];
+  for (const key of candidates) {
+    const value = rawField(activity, key);
+    if (typeof value === "string" && value.trim() !== "") {
+      const clean = value.trim();
+      return clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
+    }
+  }
+  return "Carrera";
+}
+
+function normalize(value: unknown): string {
+  return typeof value === "string"
+    ? value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase()
+    : "";
+}
+
+function formatHours(seconds: number): string {
+  return (seconds / 3600).toFixed(1);
+}
+
+function formatDuration(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+    : `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function formatPace(secondsPerKm: number): string {
+  if (secondsPerKm <= 0) return "—";
+  const m = Math.floor(secondsPerKm / 60);
+  const s = Math.round(secondsPerKm % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function formatShortDate(date: Date | null, fallback: string): string {
+  if (!date) return fallback;
+  return date.toLocaleDateString("es-ES", { day: "numeric", month: "short", year: "numeric" });
+}
+
+/** Normaliza la lista devuelta por el hook a un tipo estable. */
+function useActivityList(): Activity[] {
+  const { activities } = useActivities();
+  return useMemo(() => (activities ?? []) as unknown as Activity[], [activities]);
+}
+
+interface Totals {
+  sessions: number;
+  km: number;
+  elevation: number;
+  seconds: number;
+}
+
+function computeTotals(list: Activity[]): Totals {
+  return list.reduce<Totals>(
+    (acc, a) => {
+      acc.sessions += 1;
+      acc.km += activityKm(a);
+      acc.elevation += activityElevation(a);
+      acc.seconds += activityMovingSeconds(a);
+      return acc;
+    },
+    { sessions: 0, km: 0, elevation: 0, seconds: 0 },
+  );
+}
 
 function Panel({
   title,
@@ -143,39 +331,98 @@ function PremiumPanel({
 
 /* ------------------------------ Entrenamientos ----------------------------- */
 
-const surfaceSplit = [];
-
 export function TrainingsSection() {
-  const { activities } = useActivities();
+  const activities = useActivityList();
 
   const [filter, setFilter] = useState<
     "Todos" | "Suave" | "Moderado" | "Duro"
   >("Todos");
 
-const list = activities ?? [];
+  const now = useMemo(() => new Date(), []);
 
+  /** Actividades del mes en curso. */
+  const monthActivities = useMemo(
+    () =>
+      activities.filter((a) => {
+        const d = activityDate(a);
+        return !!d && d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+      }),
+    [activities, now],
+  );
 
+  const monthTotals = useMemo(() => computeTotals(monthActivities), [monthActivities]);
+
+  /** Volumen agrupado por mes (últimos 6 meses naturales). */
+  const monthlyVolume = useMemo(() => {
+    const buckets = new Map<string, number>();
+    for (const a of activities) {
+      const d = activityDate(a);
+      if (!d) continue;
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      buckets.set(key, (buckets.get(key) ?? 0) + activityKm(a));
+    }
+    return Array.from({ length: 6 }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      return {
+        mes: MONTH_LABELS[d.getMonth()] ?? "",
+        km: Number((buckets.get(key) ?? 0).toFixed(1)),
+      };
+    });
+  }, [activities, now]);
+
+  /** Reparto por superficie de los últimos 90 días (datos reales). */
+  const surfaceSplit = useMemo(() => {
+    const since = now.getTime() - 90 * 86_400_000;
+    const buckets = new Map<string, number>();
+    for (const a of activities) {
+      const d = activityDate(a);
+      if (!d || d.getTime() < since) continue;
+      const key = activitySurface(a);
+      buckets.set(key, (buckets.get(key) ?? 0) + activityKm(a));
+    }
+    if (buckets.size === 0) return [{ tipo: "Carrera", km: 0 }];
+    return Array.from(buckets, ([tipo, km]) => ({ tipo, km: Number(km.toFixed(1)) })).sort(
+      (a, b) => b.km - a.km,
+    );
+  }, [activities, now]);
+
+  /** Historial filtrado por esfuerzo real. */
+  const history = useMemo(
+    () =>
+      activities
+        .filter((a) => filter === "Todos" || normalize(a.effort) === normalize(filter))
+        .map((a) => ({
+          id: a.id,
+          title: a.title,
+          date: a.date,
+          distance: a.distance || `${activityKm(a).toFixed(2)} km`,
+          pace: a.pace || `${formatPace(activityPaceSeconds(a))} /km`,
+          hr: activityHr(a),
+        })),
+    [activities, filter],
+  );
 
   return (
     <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat label="Sesiones del mes" value={String(list.length)} />
+        <Stat label="Sesiones del mes" value={String(monthTotals.sessions)} />
 
 <Stat 
   label="Volumen del mes" 
-  value="0" 
+  value={monthTotals.km.toFixed(1)} 
   unit="km" 
 />
 
 <Stat 
   label="Desnivel acumulado" 
-  value="0" 
+  value={Math.round(monthTotals.elevation).toLocaleString("es-ES")} 
   unit="m"
 />
 
 <Stat 
   label="Tiempo en movimiento" 
-  value="0:00" 
+  value={formatHours(monthTotals.seconds)} 
   unit="h"
 />
       </div>
@@ -217,7 +464,7 @@ const list = activities ?? [];
         </Panel>
       </div>
 
-      <Panel title="Historial de sesiones" subtitle={`${activities.length} resultados`}>
+      <Panel title="Historial de sesiones" subtitle={`${history.length} resultados`}>
         <div className="mb-4 flex flex-wrap gap-2">
           {(["Todos", "Suave", "Moderado", "Duro"] as const).map((f) => (
             <button
@@ -234,7 +481,7 @@ const list = activities ?? [];
           ))}
         </div>
         <div className="divide-y divide-border">
-          {activities.map((w) => (
+          {history.map((w) => (
             <div key={w.id} className="grid grid-cols-2 gap-2 py-3 text-sm md:grid-cols-5">
               <div className="col-span-2 md:col-span-2">
                 <p className="font-medium">{w.title}</p>
@@ -275,9 +522,21 @@ const list = activities ?? [];
 
 /* ---------------------------------- Planes --------------------------------- */
 
-const planWeeks = [];
+interface PlanWeek {
+  semana: string;
+  km: number;
+  calidad: number;
+}
 
-const weekSessions = [];
+interface WeekSession {
+  day: string;
+  title: string;
+  detail: string;
+}
+
+const planWeeks: PlanWeek[] = [];
+
+const weekSessions: WeekSession[] = [];
 
 export function PlansSection() {
   return (
@@ -520,7 +779,12 @@ function RaceCard({
   );
 }
 
-const raceHistory = [];
+interface RaceHistoryPoint {
+  year: string;
+  tiempo: number;
+}
+
+const raceHistory: RaceHistoryPoint[] = [];
 
 export function RacesSection() {
   const [races, setRaces] = useState<Race[]>(defaultRaces);
@@ -542,7 +806,10 @@ export function RacesSection() {
     window.localStorage.setItem(RACES_KEY, JSON.stringify(next));
   };
 
-  const sorted = [...races].sort((a, b) => a.date.localeCompare(b.date));
+  const sorted = useMemo(
+    () => [...races].sort((a, b) => a.date.localeCompare(b.date)),
+    [races],
+  );
 
   return (
     <div className="space-y-3">
@@ -639,7 +906,11 @@ interface Objective {
 
 const initialObjectives: Objective[] = [];
 
-const records = [];
+interface PersonalRecord {
+  dist: string;
+  time: string;
+  date: string;
+}
 
 function GoalRow({
   goal,
@@ -739,6 +1010,64 @@ function GoalRow({
 
 export function GoalsSection() {
   const [objectives, setObjectives] = useState<Objective[]>(initialObjectives);
+  const activities = useActivityList();
+
+  /** Récords personales calculados con datos reales. */
+  const records = useMemo<PersonalRecord[]>(() => {
+    const result: PersonalRecord[] = [];
+    if (activities.length === 0) return result;
+
+    // Mejor 5K: sesión de al menos 5 km con mejor ritmo medio.
+    const fiveKCandidates = activities.filter(
+      (a) => activityKm(a) >= 5 && activityPaceSeconds(a) > 0,
+    );
+    if (fiveKCandidates.length > 0) {
+      const best = fiveKCandidates.reduce((acc, a) =>
+        activityPaceSeconds(a) < activityPaceSeconds(acc) ? a : acc,
+      );
+      result.push({
+        dist: "Mejor 5K",
+        time: formatDuration(activityPaceSeconds(best) * 5),
+        date: formatShortDate(activityDate(best), best.date),
+      });
+    }
+
+    const withDistance = activities.filter((a) => activityKm(a) > 0);
+    if (withDistance.length > 0) {
+      const longest = withDistance.reduce((acc, a) => (activityKm(a) > activityKm(acc) ? a : acc));
+      result.push({
+        dist: "Mayor distancia",
+        time: `${activityKm(longest).toFixed(2)} km`,
+        date: formatShortDate(activityDate(longest), longest.date),
+      });
+    }
+
+    const withElevation = activities.filter((a) => activityElevation(a) > 0);
+    if (withElevation.length > 0) {
+      const climb = withElevation.reduce((acc, a) =>
+        activityElevation(a) > activityElevation(acc) ? a : acc,
+      );
+      result.push({
+        dist: "Mayor desnivel",
+        time: `${Math.round(activityElevation(climb)).toLocaleString("es-ES")} m`,
+        date: formatShortDate(activityDate(climb), climb.date),
+      });
+    }
+
+    const withSpeed = activities.filter((a) => activitySpeedKmh(a) > 0);
+    if (withSpeed.length > 0) {
+      const fastest = withSpeed.reduce((acc, a) =>
+        activitySpeedKmh(a) > activitySpeedKmh(acc) ? a : acc,
+      );
+      result.push({
+        dist: "Mayor velocidad media",
+        time: `${activitySpeedKmh(fastest).toFixed(2)} km/h`,
+        date: formatShortDate(activityDate(fastest), fastest.date),
+      });
+    }
+
+    return result;
+  }, [activities]);
 
   return (
     <div className="grid gap-3 xl:grid-cols-2">
@@ -828,6 +1157,12 @@ function paceFromTime(totalSeconds: number, km: number) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+interface HrZone {
+  z: string;
+  lo: number;
+  hi: number;
+}
+
 export function CalculatorsSection() {
   const [dist, setDist] = useState("");
   const [hours, setHours] = useState("");
@@ -844,7 +1179,7 @@ export function CalculatorsSection() {
   const speed = total > 0 && distN > 0 ? ((distN / total) * 3600).toFixed(2) : "—";
 
 
-  const zones = [];
+  const zones: HrZone[] = [];
 
   const inputCls =
     "w-full rounded-xl border border-border bg-background/60 px-3 py-2.5 text-sm outline-none transition-colors focus:border-primary";
@@ -936,18 +1271,106 @@ export function CalculatorsSection() {
 
 /* -------------------------------- Estadísticas ------------------------------ */
 
-const radarData = [];
+interface RadarPoint {
+  skill: string;
+  valor: number;
+}
 
-const yearly = [];
+const radarData: RadarPoint[] = [];
 
 export function StatsSection() {
+  const activities = useActivityList();
+  const currentYear = useMemo(() => new Date().getFullYear(), []);
+
+  /** Actividades del año en curso. */
+  const yearActivities = useMemo(
+    () =>
+      activities.filter((a) => {
+        const d = activityDate(a);
+        return !!d && d.getFullYear() === currentYear;
+      }),
+    [activities, currentYear],
+  );
+
+  const yearTotals = useMemo(() => computeTotals(yearActivities), [yearActivities]);
+
+  /** Volumen y desnivel agrupados por mes del año en curso. */
+  const yearly = useMemo(() => {
+    const months = MONTH_LABELS.map((mes) => ({ mes, km: 0, elev: 0 }));
+    for (const a of yearActivities) {
+      const d = activityDate(a);
+      if (!d) continue;
+      const bucket = months[d.getMonth()];
+      if (!bucket) continue;
+      bucket.km += activityKm(a);
+      bucket.elev += activityElevation(a);
+    }
+    return months.map((m) => ({
+      mes: m.mes,
+      km: Number(m.km.toFixed(1)),
+      elev: Math.round(m.elev),
+    }));
+  }, [yearActivities]);
+
+  /** Momentos destacados calculados con datos reales. */
+  const highlights = useMemo(() => {
+    const items: { icon: typeof Mountain; title: string; value: string }[] = [];
+    if (activities.length === 0) return items;
+
+    const withElevation = activities.filter((a) => activityElevation(a) > 0);
+    if (withElevation.length > 0) {
+      const best = withElevation.reduce((acc, a) =>
+        activityElevation(a) > activityElevation(acc) ? a : acc,
+      );
+      items.push({
+        icon: Mountain,
+        title: "Mayor desnivel",
+        value: `${Math.round(activityElevation(best)).toLocaleString("es-ES")} m · ${best.title}`,
+      });
+    }
+
+    const withDistance = activities.filter((a) => activityKm(a) > 0);
+    if (withDistance.length > 0) {
+      const best = withDistance.reduce((acc, a) => (activityKm(a) > activityKm(acc) ? a : acc));
+      items.push({
+        icon: Ruler,
+        title: "Mayor distancia",
+        value: `${activityKm(best).toFixed(2)} km · ${best.title}`,
+      });
+    }
+
+    const withPace = activities.filter((a) => activityPaceSeconds(a) > 0);
+    if (withPace.length > 0) {
+      const best = withPace.reduce((acc, a) =>
+        activityPaceSeconds(a) < activityPaceSeconds(acc) ? a : acc,
+      );
+      items.push({
+        icon: Timer,
+        title: "Sesión más rápida",
+        value: `${formatPace(activityPaceSeconds(best))} /km · ${best.title}`,
+      });
+    }
+
+    const withHr = activities.filter((a) => activityHr(a) > 0);
+    if (withHr.length > 0) {
+      const best = withHr.reduce((acc, a) => (activityHr(a) > activityHr(acc) ? a : acc));
+      items.push({
+        icon: HeartPulse,
+        title: "Mayor FC media",
+        value: `${Math.round(activityHr(best))} bpm · ${best.title}`,
+      });
+    }
+
+    return items;
+  }, [activities]);
+
   return (
     <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat label="Total 2026" value="0" unit="km" />
-<Stat label="Desnivel total" value="0" unit="m" />
-<Stat label="Sesiones" value={String(list?.length ?? activities?.length ?? 0)} />
-<Stat label="Horas corriendo" value="0" unit="h" />
+        <Stat label={`Total ${currentYear}`} value={yearTotals.km.toFixed(1)} unit="km" />
+<Stat label="Desnivel total" value={Math.round(yearTotals.elevation).toLocaleString("es-ES")} unit="m" />
+<Stat label="Sesiones" value={String(yearTotals.sessions)} />
+<Stat label="Horas corriendo" value={formatHours(yearTotals.seconds)} unit="h" />
       </div>
 
       <WeekComparison />
@@ -983,13 +1406,9 @@ export function StatsSection() {
         </Panel>
       </div>
 
-      <Panel title="Momentos destacados" subtitle="temporada 2026">
+      <Panel title="Momentos destacados" subtitle={`temporada ${currentYear}`}>
         <div className="grid gap-3 md:grid-cols-3">
-          {[
-            { icon: Mountain, title: "Mayor desnivel", value: "1 240 m · Trail Guadarrama" },
-            { icon: Timer, title: "Sesión más rápida", value: "3:38 /km · 5 × 1000 m" },
-            { icon: Trophy, title: "Mejor marca", value: "17:42 en 5 K" },
-          ].map((h) => (
+          {highlights.map((h) => (
             <div key={h.title} className="rounded-2xl border border-border p-4">
               <h.icon className="size-4 text-primary" />
               <p className="mt-3 text-sm font-medium">{h.title}</p>
@@ -1026,7 +1445,7 @@ export function StatsSection() {
       >
         <div className="grid gap-3 md:grid-cols-3">
           {[
-            { t: "Exportar temporada", v: "CSV con 168 sesiones" },
+            { t: "Exportar temporada", v: `CSV con ${activities.length} sesiones` },
             { t: "Archivos GPX", v: "Descarga masiva de rutas" },
             { t: "API PACE", v: "Token personal + webhooks" },
           ].map((e) => (
@@ -1252,4 +1671,3 @@ export function SettingsSection() {
     </div>
   );
 }
-
