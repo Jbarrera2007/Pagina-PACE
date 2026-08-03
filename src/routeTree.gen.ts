@@ -19,6 +19,7 @@ import { Route as ApiChatRouteImport } from './routes/api/chat'
 import { Route as ApiPieInsightRouteImport } from './routes/api/pie-insight'
 import { Route as DotlovableOauthConsentRouteImport } from './routes/[.]lovable.oauth.consent'
 import { Route as Char91DotmcpChar93InvokeToolToolRouteImport } from './routes/[.mcp]/invoke-tool/$tool'
+import { Route as ApiPublicStravaCallbackRouteImport } from './routes/api/public/strava/callback'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -73,6 +74,11 @@ const Char91DotmcpChar93InvokeToolToolRoute =
     path: '/.mcp/invoke-tool/$tool',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPublicStravaCallbackRoute = ApiPublicStravaCallbackRouteImport.update({
+  id: '/api/public/strava/callback',
+  path: '/api/public/strava/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -85,6 +91,7 @@ export interface FileRoutesByFullPath {
   '/api/pie-insight': typeof ApiPieInsightRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
+  '/api/public/strava/callback': typeof ApiPublicStravaCallbackRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -97,6 +104,7 @@ export interface FileRoutesByTo {
   '/api/pie-insight': typeof ApiPieInsightRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
+  '/api/public/strava/callback': typeof ApiPublicStravaCallbackRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -110,6 +118,7 @@ export interface FileRoutesById {
   '/api/pie-insight': typeof ApiPieInsightRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
+  '/api/public/strava/callback': typeof ApiPublicStravaCallbackRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -124,6 +133,7 @@ export interface FileRouteTypes {
     | '/api/pie-insight'
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
+    | '/api/public/strava/callback'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -136,6 +146,7 @@ export interface FileRouteTypes {
     | '/api/pie-insight'
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
+    | '/api/public/strava/callback'
   id:
     | '__root__'
     | '/'
@@ -148,6 +159,7 @@ export interface FileRouteTypes {
     | '/api/pie-insight'
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
+    | '/api/public/strava/callback'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -161,6 +173,7 @@ export interface RootRouteChildren {
   ApiPieInsightRoute: typeof ApiPieInsightRoute
   DotlovableOauthConsentRoute: typeof DotlovableOauthConsentRoute
   Char91DotmcpChar93InvokeToolToolRoute: typeof Char91DotmcpChar93InvokeToolToolRoute
+  ApiPublicStravaCallbackRoute: typeof ApiPublicStravaCallbackRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -235,6 +248,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof Char91DotmcpChar93InvokeToolToolRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/strava/callback': {
+      id: '/api/public/strava/callback'
+      path: '/api/public/strava/callback'
+      fullPath: '/api/public/strava/callback'
+      preLoaderRoute: typeof ApiPublicStravaCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -250,6 +270,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPieInsightRoute: ApiPieInsightRoute,
   DotlovableOauthConsentRoute: DotlovableOauthConsentRoute,
   Char91DotmcpChar93InvokeToolToolRoute: Char91DotmcpChar93InvokeToolToolRoute,
+  ApiPublicStravaCallbackRoute: ApiPublicStravaCallbackRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

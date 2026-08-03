@@ -28,7 +28,6 @@ import {
   ZonesPanel,
 } from "@/components/dashboard/panels";
 import { PieDashboard } from "@/components/dashboard/pie";
-import { MissionControl } from "@/components/dashboard/mission-control";
 
 
 
@@ -138,9 +137,8 @@ function Dashboard() {
       default:
         return (
           <div className="space-y-3">
-            <MissionControl name={displayName === "corredor" ? undefined : displayName} />
-
             <MetricGrid />
+
 
             <div className="grid gap-3 xl:grid-cols-3">
               <LoadChart />

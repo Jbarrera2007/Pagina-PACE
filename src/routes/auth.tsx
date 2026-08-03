@@ -4,6 +4,7 @@ import { Activity, ArrowLeft, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { lovable } from "@/integrations/lovable/index";
 import { useAuth } from "@/hooks/use-auth";
 
 export const Route = createFileRoute("/auth")({
@@ -88,23 +89,21 @@ function AuthPage() {
       setBusy(false);
     }
   }
-  
+
   async function handleGoogle() {
-  setBusy(true);
-
-  const { error } = await supabase.auth.signInWithOAuth({
-    provider: "google",
-    options: {
-      redirectTo: window.location.origin,
-    },
-  });
-
-  if (error) {
-    setBusy(false);
-    toast.error("No se pudo iniciar sesión con Google");
-    return;
+    setBusy(true);
+    const target = next ?? "/dashboard";
+    const result = await lovable.auth.signInWithOAuth("google", {
+      redirect_uri: `${window.location.origin}/auth?next=${encodeURIComponent(target)}`,
+    });
+    if (result.error) {
+      setBusy(false);
+      toast.error("No se pudo iniciar sesión con Google");
+      return;
+    }
+    if (result.redirected) return;
+    goNext();
   }
-}
 
 
   return (

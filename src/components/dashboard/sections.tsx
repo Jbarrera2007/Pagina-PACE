@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { recentWorkouts, trainingPlans } from "@/lib/pace-data";
 import { WeekComparison } from "@/components/dashboard/week-compare";
+import { StravaConnect } from "@/components/dashboard/strava-connect";
 import {
   EditorUnlock,
   Locked,
@@ -1201,6 +1202,8 @@ export function ProfileSection({ name, email }: { name: string; email: string })
       </div>
 
       <PlanComparison tier={tier} />
+
+      <StravaConnect />
 
       <EditorUnlock />
 

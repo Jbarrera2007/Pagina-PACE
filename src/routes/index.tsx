@@ -1,4 +1,6 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useEffect } from "react";
+import { useAuth } from "@/hooks/use-auth";
 import { Navbar, Hero, LogoStrip } from "@/components/landing/hero";
 import {
   Benefits,
@@ -34,6 +36,13 @@ export const Route = createFileRoute("/")({
 });
 
 function Landing() {
+  const { user, loading } = useAuth();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!loading && user) void navigate({ to: "/dashboard", replace: true });
+  }, [user, loading, navigate]);
+
   return (
     <main className="min-h-screen bg-background">
       <Navbar />
