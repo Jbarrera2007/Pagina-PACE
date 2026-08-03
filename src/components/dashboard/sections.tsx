@@ -37,7 +37,7 @@ import {
   Trophy,
   Zap,
 } from "lucide-react";
-import { useWorkouts } from "@/hooks/useWorkouts";import { WeekComparison } from "@/components/dashboard/week-compare";
+import { useActivities } from "@/hooks/useActivities()";import { WeekComparison } from "@/components/dashboard/week-compare";
 import { StravaConnect } from "@/components/dashboard/strava-connect";
 import {
   EditorUnlock,
