@@ -1,3 +1,7 @@
+import { createClient } from "@supabase/supabase-js";
+import OpenAI from "openai";
+import { createFileRoute } from "@tanstack/react-router";
+
 const SYSTEM_PROMPT = `
 Eres el IA Coach de PACE, un entrenador profesional de running con experiencia en fisiología del ejercicio, periodización y prevención de lesiones.
 
@@ -42,29 +46,26 @@ export const Route = createFileRoute("/api/chat")({
           );
 
           if (!token) {
-            return new Response(
-              "Unauthorized",
-              {
-                status: 401,
-              },
-            );
+            return new Response("Unauthorized", {
+              status: 401,
+            });
           }
 
           // -----------------------------------------
           // 2. VARIABLES DE ENTORNO
           // -----------------------------------------
 
-          const supabaseUrl = process.env["SUPABASE_URL"];
+          const supabaseUrl =
+            process.env["SUPABASE_URL"];
 
+          const supabaseKey =
+            process.env["SUPABASE_PUBLISHABLE_KEY"];
 
-          const supabaseKey = process.env["SUPABASE_PUBLISHABLE_KEY"];
+          const openaiKey =
+            process.env["OPENAI_API_KEY"];
 
-
-          const openaiKey = process.env["OPENAI_API_KEY"];
           if (!supabaseUrl) {
-            console.error(
-              "Falta SUPABASE_URL",
-            );
+            console.error("Falta SUPABASE_URL");
 
             return new Response(
               "Missing SUPABASE_URL",
@@ -135,12 +136,9 @@ export const Route = createFileRoute("/api/chat")({
               userError,
             );
 
-            return new Response(
-              "Unauthorized",
-              {
-                status: 401,
-              },
-            );
+            return new Response("Unauthorized", {
+              status: 401,
+            });
           }
 
           const user = userData.user;
@@ -240,7 +238,7 @@ y proporciona una recomendación general.
           // 8. CREAR CLIENTE OPENAI
           // -----------------------------------------
 
-          const openai = new OpenAi({
+          const openai = new OpenAI({
             apiKey: openaiKey,
           });
 
@@ -307,11 +305,11 @@ y proporciona una recomendación general.
           // -----------------------------------------
 
           const completion =
-  await openai.chat.completions.create({
-    model: "gpt-5-mini",
-    messages: openaiMessages,
-    stream: true,
-  });
+            await openai.chat.completions.create({
+              model: "gpt-5-mini",
+              messages: openaiMessages,
+              stream: true,
+            });
 
           // -----------------------------------------
           // 12. STREAM DE RESPUESTA
@@ -370,7 +368,7 @@ y proporciona una recomendación general.
 
                     if (assistantError) {
                       console.error(
-                        "Error guardando respuesta IA:",
+                        "Error guardando respuesta:",
                         assistantError,
                       );
                     }
@@ -406,9 +404,7 @@ y proporciona una recomendación general.
                     error,
                   );
 
-                  controller.error(
-                    error,
-                  );
+                  controller.error(error);
                 }
               },
             });

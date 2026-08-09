@@ -73,29 +73,32 @@ function Dashboard() {
 
   const [profileName, setProfileName] = useState<string | null>(null);
 
-  useEffect(() => {
-  if (!user) return;
+useEffect(() => {
+  if (!user) {
+    setProfileName(null);
+    return;
+  }
 
-  void supabase
-    .from("profiles")
-    .select("name")
-    .eq("id", user.id)
-    .maybeSingle()
-    .then(({ data, error }) => {
-      if (error) {
-        console.error("Error cargando perfil:", error);
-        return;
-      }
-
-      setProfileName(data?.name ?? null);
-    });
-}, [user]);
+  const metadata = user.user_metadata as
+    | Record<string, unknown>
+    | null
+    | undefined;
 
   const fullName =
-    profileName ??
-    (user?.user_metadata?.["full_name"] as string | undefined) ??
-    (user?.user_metadata?.["name"] as string | undefined) ??
-    (user?.email ? user.email.split("@")[0]! : "");
+    typeof metadata?.["full_name"] === "string"
+      ? metadata["full_name"]
+      : typeof metadata?.["name"] === "string"
+        ? metadata["name"]
+        : typeof user.email === "string"
+          ? user.email.split("@")[0]
+          : null;
+
+setProfileName(fullName ?? null);
+}, [user]);
+
+const fullName = profileName ?? "";
+
+
   const displayName = fullName
     ? fullName.split(" ")[0]!.charAt(0).toUpperCase() + fullName.split(" ")[0]!.slice(1)
     : "corredor";
