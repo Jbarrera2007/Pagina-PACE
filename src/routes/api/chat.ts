@@ -42,8 +42,10 @@ export const Route = createFileRoute("/api/chat")({
         if (messages.length === 0) return new Response("Messages are required", { status: 400 });
 
         const apiKey = process.env["LOVABLE_API_KEY"];
-        if (!apiKey) return new Response("Missing AI credentials", { status: 500 });
-
+if (!apiKey) {
+  console.error("PACE IA: LOVABLE_API_KEY no está configurada");
+  return new Response("Missing AI credentials", { status: 500 });
+}
         // Contexto real del atleta para que el coach no responda a ciegas.
         const [{ data: profile }, { data: activities }] = await Promise.all([
           supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(),
@@ -61,6 +63,13 @@ ultimas_actividades=${JSON.stringify(activities ?? [])}
 Si están vacíos, indica que aún no hay entrenamientos sincronizados y razona de forma general.`;
 
         const lastUser = [...messages].reverse().find((m) => m.role === "user");
+        console.log("PACE IA:", {
+  userId: user.id,
+  messages: messages.length,
+  hasApiKey: Boolean(apiKey),
+  activities: activities?.length ?? 0,
+  hasProfile: Boolean(profile),
+});
 
         const upstream = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
           method: "POST",

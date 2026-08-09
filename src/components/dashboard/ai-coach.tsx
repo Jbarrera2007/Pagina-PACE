@@ -148,8 +148,30 @@ export function AiCoach() {
 
       if (res.status === 429) throw new Error("Demasiadas peticiones. Prueba en unos segundos.");
       if (res.status === 402) throw new Error("Se han agotado los créditos de IA del espacio.");
-      if (!res.ok || !res.body) throw new Error("El coach no está disponible ahora mismo.");
+      if (!res.ok || !res.body) {
+  const detail = await res.text();
 
+  let message = `Error ${res.status}`;
+
+  try {
+    const parsed = JSON.parse(detail);
+    message =
+      parsed?.error?.message ||
+      parsed?.message ||
+      parsed?.error ||
+      detail ||
+      message;
+  } catch {
+    if (detail) message = detail;
+  }
+
+  console.error("PACE IA /api/chat:", {
+    status: res.status,
+    detail,
+  });
+
+  throw new Error(message);
+}
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       while (true) {

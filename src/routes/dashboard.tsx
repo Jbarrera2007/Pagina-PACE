@@ -177,8 +177,8 @@ function Dashboard() {
           <div className="min-w-0">
             <p className="truncate text-xs text-muted-foreground">
               {section === "Dashboard"
-                ? "Domingo, 2 de agosto"
-                : (subtitles[section] ?? "Domingo, 2 de agosto")}
+                ? "Domingo, 9 de agosto"
+                : (subtitles[section] ?? "Domingo, 9 de agosto")}
             </p>
             <h1 className="mt-1 truncate text-xl font-semibold tracking-tight sm:text-2xl">
               {section === "Dashboard" ? `Hola, ${displayName}` : section}
