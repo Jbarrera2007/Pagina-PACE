@@ -1,176 +1,421 @@
+
 /**
- * Historial de actividades del corredor.
+ * Historial real de actividades del corredor.
  *
- * Mientras la sincronización con Strava no esté conectada, PIE trabaja sobre un
- * historial sintético pero realista (3 temporadas completas) generado de forma
- * determinista. Cuando la tabla `activities` tenga datos reales, basta con
- * mapearlos a `PieActivity` y el motor funciona igual.
+ * Fuente:
+ *   Strava → Supabase → public.activities → PIE
+ *
+ * IMPORTANTE:
+ * - No genera actividades ficticias.
+ * - No inventa FC, temperatura, humedad ni viento.
+ * - Las métricas que requieren datos que no existen en Strava/Supabase
+ *   deben tratarse como "sin datos".
  */
 
-export type SessionKind = "rodaje" | "series" | "umbral" | "larga" | "competicion";
+import { createClient } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase";
+
+export type SessionKind =
+  | "rodaje"
+  | "series"
+  | "umbral"
+  | "larga"
+  | "competicion";
 
 export interface PieActivity {
   id: string;
-  /** ISO date */
   date: string;
+
   distanceKm: number;
   movingTimeS: number;
-  /** s/km */
   paceS: number;
-  avgHr: number;
-  maxHr: number;
-  cadence: number;
+
+  avgHr?: number;
+  maxHr?: number;
+  cadence?: number;
+
   elevationM: number;
+
   kind: SessionKind;
+
+  /**
+   * Actualmente activities guarda gear_id dentro de raw.
+   * Hasta tener una tabla de zapatillas/nombre de gear,
+   * usamos el gear_id real de Strava.
+   */
   shoe: string;
-  tempC: number;
-  humidity: number;
-  windKmh: number;
-  /** hora local de inicio, 0-23 */
+
+  /**
+   * Estos datos NO están actualmente en activities.
+   * No los inventamos.
+   */
+  tempC?: number;
+  humidity?: number;
+  windKmh?: number;
+
   hour: number;
 }
 
-function mulberry32(seed: number) {
-  let a = seed;
-  return () => {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+type ActivityRow = {
+  id: string;
+  user_id: string;
+  source: string;
+  external_id: string;
+  name: string;
+  sport_type: string | null;
+
+  started_at: string;
+
+  distance_m: number | null;
+  moving_time_s: number | null;
+  elapsed_time_s: number | null;
+
+  avg_pace_s_per_km: number | null;
+  avg_speed_ms: number | null;
+
+  avg_hr: number | null;
+  max_hr: number | null;
+
+  avg_cadence: number | null;
+
+  elevation_gain_m: number | null;
+  elevation_m: number | null;
+
+  effort: string | null;
+
+  raw: Record<string, unknown> | null;
+};
+
+/**
+ * Cliente Supabase.
+ *
+ * IMPORTANTE:
+ * Usa variables de entorno.
+ * NO pongas la service_role key en código del navegador.
+ */
+function getSupabase() {
+  process.env["NEXT_PUBLIC_SUPABASE_URL"]
+  process.env["NEXT_PUBLIC_SUPABASE_ANON_KEY"]
+
+  if (!url || !anonKey) {
+    throw new Error(
+      "Faltan NEXT_PUBLIC_SUPABASE_URL o NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    );
+  }
+
+  return createClient(url, anonKey);
+}
+
+/**
+ * Convierte el tipo de actividad de Strava a nuestro SessionKind.
+ *
+ * Esto es una primera clasificación.
+ * Más adelante podemos mejorarla utilizando laps/streams.
+ */
+function mapSessionKind(row: ActivityRow): SessionKind {
+  const name = (row.name ?? "").toLowerCase();
+  const sport = (row.sport_type ?? "").toLowerCase();
+  const effort = (row.effort ?? "").toLowerCase();
+
+  const raw = row.raw ?? {};
+
+  const workoutType =
+    typeof raw.workout_type === "number"
+      ? raw.workout_type
+      : null;
+
+  const distanceKm = (row.distance_m ?? 0) / 1000;
+
+  // Strava workout_type = 1 suele corresponder a competición/race.
+  if (
+    workoutType === 1 ||
+    name.includes("race") ||
+    name.includes("compet") ||
+    name.includes("carrera")
+  ) {
+    return "competicion";
+  }
+
+  // Tirada larga.
+  if (distanceKm >= 18) {
+    return "larga";
+  }
+
+  // Palabras habituales para sesiones de calidad.
+  if (
+    name.includes("series") ||
+    name.includes("interval") ||
+    name.includes("intervals") ||
+    name.includes("repeticiones") ||
+    name.includes("400") ||
+    name.includes("800") ||
+    name.includes("1000") ||
+    name.includes("1200") ||
+    name.includes("1600") ||
+    effort.includes("series")
+  ) {
+    return "series";
+  }
+
+  if (
+    name.includes("umbral") ||
+    name.includes("threshold") ||
+    name.includes("tempo") ||
+    name.includes("fartlek") ||
+    name.includes("threshold")
+  ) {
+    return "umbral";
+  }
+
+  // Todo lo demás que sea carrera se considera rodaje.
+  if (
+    sport === "run" ||
+    sport === "running" ||
+    sport === ""
+  ) {
+    return "rodaje";
+  }
+
+  return "rodaje";
+}
+
+/**
+ * Strava suele devolver la cadencia de carrera como pasos de una pierna
+ * (ej. 79.4), mientras PIE trabaja con pasos/minuto completos.
+ *
+ * Por eso 79.4 → ~159 spm.
+ */
+function mapCadence(value: number | null): number | undefined {
+  if (value == null || !Number.isFinite(value)) {
+    return undefined;
+  }
+
+  const cadence = value < 120 ? value * 2 : value;
+
+  return Math.round(cadence);
+}
+
+/**
+ * Convierte una fila REAL de Supabase a PieActivity.
+ */
+function mapActivity(row: ActivityRow): PieActivity | null {
+  const distanceM = row.distance_m ?? 0;
+  const movingTimeS = row.moving_time_s ?? 0;
+
+  if (distanceM <= 0 || movingTimeS <= 0) {
+    return null;
+  }
+
+  const distanceKm = distanceM / 1000;
+
+  const paceS =
+    row.avg_pace_s_per_km != null &&
+    row.avg_pace_s_per_km > 0
+      ? row.avg_pace_s_per_km
+      : movingTimeS / distanceKm;
+
+  const startedAt = new Date(row.started_at);
+
+  const raw = row.raw ?? {};
+
+  /**
+   * gear_id existe dentro del JSON de Strava.
+   *
+   * Ejemplo real:
+   * "gear_id": "g13550696"
+   */
+  const gearId =
+    typeof raw.gear_id === "string"
+      ? raw.gear_id
+      : "sin-zapatillas";
+
+  return {
+    id: row.external_id || row.id,
+
+    date: row.started_at,
+
+    distanceKm,
+
+    movingTimeS,
+
+    paceS: Math.round(paceS),
+
+    avgHr:
+      row.avg_hr != null && row.avg_hr > 0
+        ? row.avg_hr
+        : undefined,
+
+    maxHr:
+      row.max_hr != null && row.max_hr > 0
+        ? row.max_hr
+        : undefined,
+
+    cadence: mapCadence(row.avg_cadence),
+
+    elevationM: Math.round(
+      row.elevation_gain_m ??
+        row.elevation_m ??
+        0,
+    ),
+
+    kind: mapSessionKind(row),
+
+    shoe: gearId,
+
+    /**
+     * No inventamos estos datos.
+     *
+     * Si más adelante los guardas en Supabase,
+     * se pueden mapear aquí.
+     */
+    tempC: undefined,
+    humidity: undefined,
+    windKmh: undefined,
+
+    /**
+     * started_at está en UTC.
+     * Para España usamos la hora local de la actividad
+     * cuando el runtime tiene configurada la zona correspondiente.
+     */
+    hour: Number(
+      new Intl.DateTimeFormat("es-ES", {
+        hour: "2-digit",
+        hour12: false,
+        timeZone: "Europe/Madrid",
+      }).format(startedAt),
+    ),
   };
 }
 
-const SHOES = [
-  { name: "Nimbus Cloud 26", from: 0, to: 60, kindBias: ["rodaje", "larga"] as SessionKind[] },
-  { name: "Tempo Fly 4", from: 20, to: 110, kindBias: ["umbral", "series"] as SessionKind[] },
-  { name: "Vaporize Elite 3", from: 60, to: 160, kindBias: ["competicion", "series"] as SessionKind[] },
-  { name: "Trail Peak GTX", from: 30, to: 160, kindBias: ["larga"] as SessionKind[] },
-  { name: "Daily Rider 12", from: 90, to: 160, kindBias: ["rodaje"] as SessionKind[] },
-];
+/**
+ * Carga las actividades REALES del usuario desde Supabase.
+ */
+export async function getPieActivities(
+  userId: string,
+): Promise<PieActivity[]> {
+  const supabase = getSupabase();
 
-/** Fecha de referencia del dataset (coincide con la temporada mostrada en la app). */
-export const PIE_TODAY = new Date("2026-08-02T09:00:00Z");
+  const { data, error } = await supabase
+    .from("activities")
+    .select(`
+      id,
+      user_id,
+      source,
+      external_id,
+      name,
+      sport_type,
+      started_at,
+      distance_m,
+      moving_time_s,
+      elapsed_time_s,
+      avg_pace_s_per_km,
+      avg_speed_ms,
+      avg_hr,
+      max_hr,
+      avg_cadence,
+      elevation_gain_m,
+      elevation_m,
+      effort,
+      raw
+    `)
+    .eq("user_id", userId)
+    .eq("source", "strava")
+    .order("started_at", {
+      ascending: true,
+    });
 
-const WEEKS = 156; // 3 años
+  if (error) {
+    console.error(
+      "Error cargando actividades de Strava desde Supabase:",
+      error,
+    );
 
-function seasonalTemp(date: Date, rnd: () => number) {
-  const doy = Math.floor((date.getTime() - new Date(date.getFullYear(), 0, 0).getTime()) / 86400000);
-  const base = 15 - 10 * Math.cos((2 * Math.PI * (doy - 15)) / 365);
-  return Math.round((base + (rnd() - 0.5) * 8) * 10) / 10;
-}
-
-function buildActivities(): PieActivity[] {
-  const rnd = mulberry32(20260802);
-  const out: PieActivity[] = [];
-
-  for (let w = WEEKS - 1; w >= 0; w--) {
-    // progreso 0 (hace 3 años) -> 1 (hoy)
-    const p = (WEEKS - 1 - w) / (WEEKS - 1);
-    // mesociclos de 4 semanas con semana de descarga
-    const microcycle = (WEEKS - 1 - w) % 4;
-    const deload = microcycle === 3;
-
-    const sessionsThisWeek = deload ? 4 : rnd() > 0.14 ? 5 : 6;
-    // ritmo base de rodaje: 5:45 -> 4:55
-    const basePace = 345 - 50 * p - (rnd() - 0.5) * 6;
-    // eficiencia cardiaca: mejora con el tiempo
-    const hrBase = 152 - 12 * p;
-
-    for (let s = 0; s < sessionsThisWeek; s++) {
-      const dayOffset = w * 7 + (6 - Math.floor((s * 6) / Math.max(1, sessionsThisWeek - 1)));
-      const date = new Date(PIE_TODAY.getTime() - dayOffset * 86400000);
-
-      let kind: SessionKind = "rodaje";
-      if (s === 1 && !deload) kind = "series";
-      else if (s === 3 && !deload) kind = "umbral";
-      else if (s === sessionsThisWeek - 1) kind = "larga";
-      // alguna competición puntual
-      if (!deload && rnd() > 0.975) kind = "competicion";
-
-      let distanceKm: number;
-      let paceS: number;
-      let hrFactor: number;
-      let elevationM: number;
-
-      switch (kind) {
-        case "series":
-          distanceKm = 10 + rnd() * 4;
-          paceS = basePace - 62 - rnd() * 10;
-          hrFactor = 1.16;
-          elevationM = 40 + rnd() * 50;
-          break;
-        case "umbral":
-          distanceKm = 12 + rnd() * 4;
-          paceS = basePace - 38 - rnd() * 8;
-          hrFactor = 1.1;
-          elevationM = 60 + rnd() * 70;
-          break;
-        case "larga":
-          distanceKm = 18 + rnd() * 10 + 4 * p;
-          paceS = basePace + 12 + rnd() * 10;
-          hrFactor = 0.97;
-          elevationM = 180 + rnd() * 380;
-          break;
-        case "competicion":
-          distanceKm = [5, 10, 21.097, 42.195][Math.floor(rnd() * 4)]!;
-          paceS = basePace - 78 + (distanceKm > 20 ? 26 : 0);
-          hrFactor = 1.2;
-          elevationM = 30 + rnd() * 120;
-          break;
-        default:
-          distanceKm = 8 + rnd() * 5;
-          paceS = basePace + 18 + rnd() * 14;
-          hrFactor = 0.9;
-          elevationM = 40 + rnd() * 90;
-      }
-
-      if (deload) {
-        distanceKm *= 0.75;
-        paceS += 8;
-      }
-
-      const tempC = seasonalTemp(date, rnd);
-      // el calor penaliza ritmo y sube pulsaciones
-      const heatPenalty = Math.max(0, tempC - 17) * 1.6;
-      paceS += heatPenalty;
-
-      const humidity = Math.round(45 + rnd() * 45);
-      const windKmh = Math.round(4 + rnd() * 22);
-      const hour = [7, 7, 8, 9, 18, 19, 20][Math.floor(rnd() * 7)]!;
-
-      const avgHr = Math.round(hrBase * hrFactor + Math.max(0, tempC - 17) * 0.9 + (rnd() - 0.5) * 6);
-      const movingTimeS = Math.round(distanceKm * paceS);
-
-      out.push({
-        id: `a-${w}-${s}`,
-        date: date.toISOString(),
-        distanceKm: Math.round(distanceKm * 100) / 100,
-        movingTimeS,
-        paceS: Math.round(paceS),
-        avgHr,
-        maxHr: avgHr + 12 + Math.round(rnd() * 8),
-        cadence: Math.round(168 + 12 * p + (kind === "series" || kind === "competicion" ? 8 : 0) + rnd() * 4),
-        elevationM: Math.round(elevationM),
-        kind,
-        shoe: pickShoe(p, kind, rnd),
-        tempC,
-        humidity,
-        windKmh,
-        hour,
-      });
-    }
+    throw new Error(
+      `No se pudieron cargar las actividades: ${error.message}`,
+    );
   }
 
-  return out.sort((a, b) => a.date.localeCompare(b.date));
+  const rows = (data ?? []) as ActivityRow[];
+
+  return rows
+    .map(mapActivity)
+    .filter(
+      (activity): activity is PieActivity =>
+        activity !== null,
+    )
+    .sort(
+      (a, b) =>
+        new Date(a.date).getTime() -
+        new Date(b.date).getTime(),
+    );
 }
 
-function pickShoe(progress: number, kind: SessionKind, rnd: () => number) {
-  const weekIndex = progress * 160;
-  const candidates = SHOES.filter((s) => weekIndex >= s.from && weekIndex <= s.to);
-  const biased = candidates.filter((s) => s.kindBias.includes(kind));
-  const pool = biased.length > 0 && rnd() > 0.25 ? biased : candidates;
-  return (pool[Math.floor(rnd() * pool.length)] ?? SHOES[0]!).name;
+/**
+ * Versión para cargar únicamente las últimas N actividades.
+ */
+export async function getRecentPieActivities(
+  userId: string,
+  limit = 500,
+): Promise<PieActivity[]> {
+  const supabase = getSupabase();
+
+  const { data, error } = await supabase
+    .from("activities")
+    .select(`
+      id,
+      user_id,
+      source,
+      external_id,
+      name,
+      sport_type,
+      started_at,
+      distance_m,
+      moving_time_s,
+      elapsed_time_s,
+      avg_pace_s_per_km,
+      avg_speed_ms,
+      avg_hr,
+      max_hr,
+      avg_cadence,
+      elevation_gain_m,
+      elevation_m,
+      effort,
+      raw
+    `)
+    .eq("user_id", userId)
+    .eq("source", "strava")
+    .order("started_at", {
+      ascending: false,
+    })
+    .limit(limit);
+
+  if (error) {
+    throw new Error(
+      `No se pudieron cargar las actividades: ${error.message}`,
+    );
+  }
+
+  return (data ?? [])
+    .map((row) => mapActivity(row as ActivityRow))
+    .filter(
+      (activity): activity is PieActivity =>
+        activity !== null,
+    )
+    .sort(
+      (a, b) =>
+        new Date(a.date).getTime() -
+        new Date(b.date).getTime(),
+    );
 }
 
-export const pieActivities: PieActivity[] = buildActivities();
+/**
+ * Fecha actual para PIE.
+ *
+ * Ya no usamos:
+ *
+ * new Date("2026-08-02T09:00:00Z")
+ *
+ * porque PIE debe analizar los datos reales actuales.
+ */
+export const PIE_TODAY = new Date();
+
