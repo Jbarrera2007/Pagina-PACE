@@ -55,70 +55,109 @@ function EmptyState({ children }: { children: React.ReactNode }) {
 export function MetricGrid() {
   const { metrics, loading } = useDashboard();
 
-  if (loading || metrics.length === 0) {
+  if (loading) {
     return (
-      <div className="grid grid-cols-2 gap-2.5 sm:gap-3 xl:grid-cols-4">
-        {["Distancia semanal", "Ritmo medio", "Tiempo en movimiento", "Desnivel positivo"].map(
-          (label) => (
-            <article key={label} className="surface-panel p-3.5 sm:p-4">
-              <p className="truncate text-xs text-muted-foreground">{label}</p>
-              <div className="mt-2 font-display text-xl font-semibold sm:text-2xl">0</div>
-              <p className="mt-2 text-[11px] text-muted-foreground">
-                {loading ? "Cargando…" : "Sin datos"}
-              </p>
-            </article>
-          ),
-        )}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {[
+          "Distancia semanal",
+          "Ritmo medio",
+          "Tiempo en movimiento",
+          "Desnivel positivo",
+        ].map((label) => (
+          <article
+            key={label}
+            className="surface-panel p-3.5 sm:p-4"
+          >
+            <div className="text-xs text-muted-foreground">
+              {label}
+            </div>
+
+            <div className="mt-1 text-xl font-semibold">
+              …
+            </div>
+
+            <div className="mt-1 text-xs text-muted-foreground">
+              Cargando…
+            </div>
+          </article>
+        ))}
+      </div>
+    );
+  }
+
+  if (metrics.length === 0) {
+    return (
+      <div className="surface-panel p-5 text-sm text-muted-foreground">
+        No hay datos de actividad para calcular las métricas semanales.
       </div>
     );
   }
 
   return (
-    <div className="grid grid-cols-2 gap-2.5 sm:gap-3 xl:grid-cols-4">
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       {metrics.map((m, i) => {
-  const hasDelta = m.delta !== null;
-  const positive = m.delta !== null && m.delta >= 0;
+        const hasDelta = m.delta !== null;
+        const positive =
+          m.delta !== null && m.delta >= 0;
 
-  return (
-    <motion.article
-      key={m.id}
-      initial={{ opacity: 0, y: 14 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{
-        delay: i * 0.04,
-        duration: 0.5,
-        ease: [0.16, 1, 0.3, 1],
-      }}
-      className="surface-panel p-3.5 sm:p-4"
-    >
-      {/* ...tus datos... */}
+        return (
+          <motion.article
+            key={m.id}
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{
+              delay: i * 0.04,
+              duration: 0.5,
+              ease: [0.16, 1, 0.3, 1],
+            }}
+            className="surface-panel p-3.5 sm:p-4"
+          >
+            <div className="text-xs text-muted-foreground">
+              {m.label}
+            </div>
 
-      <span
-        className={`inline-flex items-center gap-0.5 text-[11px] ${
-          !hasDelta
-            ? "text-muted-foreground"
-            : positive
-              ? "text-success"
-              : "text-destructive"
-        }`}
-      >
-        {hasDelta ? (
-          <>
-            {positive ? (
-              <ArrowUpRight className="size-3" />
-            ) : (
-              <ArrowDownRight className="size-3" />
-            )}
+            <div className="mt-1 flex items-baseline gap-1">
+              <span className="text-xl font-semibold">
+                {m.value}
+              </span>
 
-            {Math.abs(m.delta ?? 0)}%
-          </>
-        ) : (
-          "Sin referencia"
-        )}
-      </span>
-    </motion.article>
-  );
-})}
+              {m.unit && (
+                <span className="text-xs text-muted-foreground">
+                  {m.unit}
+                </span>
+              )}
+            </div>
+
+            <div className="mt-1 text-xs text-muted-foreground">
+              {m.hint}
+            </div>
+
+            <span
+              className={`mt-2 inline-flex items-center gap-0.5 text-[11px] ${
+                !hasDelta
+                  ? "text-muted-foreground"
+                  : positive
+                    ? "text-success"
+                    : "text-destructive"
+              }`}
+            >
+              {hasDelta ? (
+                <>
+                  {positive ? (
+                    <ArrowUpRight className="size-3" />
+                  ) : (
+                    <ArrowDownRight className="size-3" />
+                  )}
+
+                  {Math.abs(m.delta ?? 0)}%
+                </>
+              ) : (
+                "Sin referencia"
+              )}
+            </span>
+          </motion.article>
+        );
+      })}
     </div>
   );
 }

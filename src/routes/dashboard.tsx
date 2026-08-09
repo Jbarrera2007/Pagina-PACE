@@ -147,35 +147,34 @@ const fullName = profileName ?? "";
       case "Configuración":
         return <SettingsSection />;
       default:
-        return (
-          <DashboardDataProvider>
-          <div className="space-y-3">
-            <MetricGrid />
+  return (
+    <DashboardDataProvider>
+      <div className="space-y-3">
+        <MetricGrid />
 
+        <div className="grid gap-3 xl:grid-cols-3">
+          <LoadChart />
+          <PredictionPanel />
+        </div>
 
-            <div className="grid gap-3 xl:grid-cols-3">
-              <LoadChart />
-              <PredictionPanel />
-            </div>
+        <div className="grid gap-3 xl:grid-cols-3">
+          <PaceChart />
+          <VolumeChart />
+          <ZonesPanel />
+        </div>
 
-            <div className="grid gap-3 xl:grid-cols-3">
-              <PaceChart />
-              <VolumeChart />
-              <ZonesPanel />
-            </div>
+        <div className="grid gap-3 xl:grid-cols-3">
+          <WorkoutsPanel />
+          <CoachPanel />
+        </div>
 
-            <div className="grid gap-3 xl:grid-cols-3">
-              <WorkoutsPanel />
-              <CoachPanel />
-            </div>
-
-            <div className="grid gap-3 xl:grid-cols-2">
-              <NextRacePanel />
-              <GoalsPanel />
-            </div>
-          </div>
-          </DashboardDataProvider>
-        );
+        <div className="grid gap-3 xl:grid-cols-2">
+          <NextRacePanel />
+          <GoalsPanel />
+        </div>
+      </div>
+    </DashboardDataProvider>
+  );
 
     }
   }
