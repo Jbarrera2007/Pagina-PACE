@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import OpenAI from "openai";
+import { GoogleGenAI } from "@google/genai";
 import { createFileRoute } from "@tanstack/react-router";
 
 const SYSTEM_PROMPT = `
@@ -61,8 +61,8 @@ export const Route = createFileRoute("/api/chat")({
           const supabaseKey =
             process.env["SUPABASE_PUBLISHABLE_KEY"];
 
-          const openaiKey =
-            process.env["OPENAI_API_KEY"];
+          const geminiKey =
+            process.env["GEMINI_API_KEY"];
 
           if (!supabaseUrl) {
             console.error("Falta SUPABASE_URL");
@@ -88,13 +88,13 @@ export const Route = createFileRoute("/api/chat")({
             );
           }
 
-          if (!openaiKey) {
+          if (!geminiKey) {
             console.error(
-              "Falta OPENAI_API_KEY",
+              "Falta GEMINI_API_KEY",
             );
 
             return new Response(
-              "Missing OPENAI_API_KEY",
+              "Missing GEMINI_API_KEY",
               {
                 status: 500,
               },
@@ -128,7 +128,8 @@ export const Route = createFileRoute("/api/chat")({
           const {
             data: userData,
             error: userError,
-          } = await supabase.auth.getUser(token);
+          } =
+            await supabase.auth.getUser(token);
 
           if (userError || !userData.user) {
             console.error(
@@ -209,25 +210,17 @@ export const Route = createFileRoute("/api/chat")({
           }
 
           // -----------------------------------------
-          // 7. CONTEXTO PARA LA IA
+          // 7. CONTEXTO DEL ATLETA
           // -----------------------------------------
 
           const athleteContext = `
 DATOS DEL ATLETA:
 
 PERFIL:
-${JSON.stringify(
-  profile,
-  null,
-  2,
-)}
+${JSON.stringify(profile, null, 2)}
 
 ÚLTIMOS ENTRENAMIENTOS:
-${JSON.stringify(
-  activities,
-  null,
-  2,
-)}
+${JSON.stringify(activities, null, 2)}
 
 Si no existen entrenamientos suficientes,
 indica que todavía no hay datos suficientes
@@ -235,31 +228,43 @@ y proporciona una recomendación general.
 `;
 
           // -----------------------------------------
-          // 8. CREAR CLIENTE OPENAI
+          // 8. CLIENTE GEMINI
           // -----------------------------------------
 
-          const openai = new OpenAI({
-            apiKey: openaiKey,
+          const ai = new GoogleGenAI({
+            apiKey: geminiKey,
           });
 
           // -----------------------------------------
-          // 9. PREPARAR MENSAJES
+          // 9. PREPARAR CONVERSACIÓN
           // -----------------------------------------
 
           const recentMessages =
             messages.slice(-20);
 
-          const openaiMessages = [
-            {
-              role: "system" as const,
-              content: SYSTEM_PROMPT,
-            },
-            {
-              role: "system" as const,
-              content: athleteContext,
-            },
-            ...recentMessages,
-          ];
+          const conversationText =
+            recentMessages
+              .map((message) => {
+                const role =
+                  message.role === "user"
+                    ? "Usuario"
+                    : "IA Coach";
+
+                return `${role}: ${message.content}`;
+              })
+              .join("\n\n");
+
+          const prompt = `
+${SYSTEM_PROMPT}
+
+${athleteContext}
+
+CONVERSACIÓN RECIENTE:
+
+${conversationText}
+
+Responde al último mensaje del usuario.
+`;
 
           // -----------------------------------------
           // 10. GUARDAR MENSAJE DEL USUARIO
@@ -301,14 +306,13 @@ y proporciona una recomendación general.
           }
 
           // -----------------------------------------
-          // 11. LLAMAR A OPENAI
+          // 11. LLAMAR A GEMINI
           // -----------------------------------------
 
-          const completion =
-            await openai.chat.completions.create({
-              model: "gpt-5-mini",
-              messages: openaiMessages,
-              stream: true,
+          const response =
+            await ai.models.generateContentStream({
+              model: "gemini-2.5-flash-lite",
+              contents: prompt,
             });
 
           // -----------------------------------------
@@ -325,11 +329,10 @@ y proporciona una recomendación general.
               async start(controller) {
                 try {
                   for await (
-                    const chunk of completion
+                    const chunk of response
                   ) {
                     const text =
-                      chunk.choices[0]?.delta
-                        ?.content ?? "";
+                      chunk.text ?? "";
 
                     if (!text) {
                       continue;
@@ -353,18 +356,18 @@ y proporciona una recomendación general.
                     const {
                       error:
                         assistantError,
-                    } = await supabase
-                      .from(
-                        "chat_messages",
-                      )
-                      .insert({
-                        conversation_id:
-                          conversationId,
-                        user_id: user.id,
-                        role: "assistant",
-                        content:
-                          fullResponse,
-                      });
+                    } =
+                      await supabase
+                        .from("chat_messages")
+                        .insert({
+                          conversation_id:
+                            conversationId,
+                          user_id:
+                            user.id,
+                          role: "assistant",
+                          content:
+                            fullResponse,
+                        });
 
                     if (assistantError) {
                       console.error(
@@ -376,18 +379,19 @@ y proporciona una recomendación general.
                     const {
                       error:
                         updateError,
-                    } = await supabase
-                      .from(
-                        "chat_conversations",
-                      )
-                      .update({
-                        updated_at:
-                          new Date().toISOString(),
-                      })
-                      .eq(
-                        "id",
-                        conversationId,
-                      );
+                    } =
+                      await supabase
+                        .from(
+                          "chat_conversations",
+                        )
+                        .update({
+                          updated_at:
+                            new Date().toISOString(),
+                        })
+                        .eq(
+                          "id",
+                          conversationId,
+                        );
 
                     if (updateError) {
                       console.error(
