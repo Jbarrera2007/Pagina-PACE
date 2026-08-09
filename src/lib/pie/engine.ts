@@ -2844,10 +2844,33 @@ export function lastWorkoutReport(
       safeDateMs(a.date),
   );
 
-  const a = sorted[0] ?? acts[0];
+  const a = sorted[0];
 
 if (!a) {
-  throw new Error("No hay actividades disponibles");
+  return {
+    activity: {
+      id: "unknown",
+      date: PIE_TODAY.toISOString(),
+      distanceKm: 0,
+      movingTimeS: 0,
+      paceS: 0,
+      avgHr: 0,
+      maxHr: 0,
+      cadence: 0,
+      elevationM: 0,
+      kind: "rodaje",
+      shoe: "Sin zapatilla",
+      tempC: 0,
+      humidity: 0,
+      windKmh: 0,
+      hour: 0,
+    } as PieActivity,
+    good: [],
+    improve: [],
+    goalImpact: "No hay ninguna sesión registrada.",
+    iqImpact: "Sin impacto disponible.",
+    tomorrow: "Registra una sesión para obtener recomendaciones.",
+  };
 }
 
   const sameKind =
