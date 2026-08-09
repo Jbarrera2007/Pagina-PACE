@@ -70,18 +70,43 @@ export interface InsightRow {
   body: string;
 }
 
+/**
+ * Información explícita de los períodos usados.
+ *
+ * Esto evita que el componente visual tenga que adivinar
+ * qué semana estamos mostrando.
+ */
+export interface WeekRange {
+  start: string;
+  end: string;
+  label: string;
+}
+
 export interface DashboardData {
   loading: boolean;
   hasActivities: boolean;
+
   metrics: Metric[];
+
   loadSeries: LoadPoint[];
+
   paceSeries: PacePoint[];
+
   volumeSeries: VolumePoint[];
+
   zoneSplit: ZoneSlice[];
+
   workouts: WorkoutRow[];
+
   predictions: PredictionRow[];
+
   goals: GoalRow[];
+
   insights: InsightRow[];
+
+  currentWeek: WeekRange;
+
+  previousWeek: WeekRange;
 
   nextRace: {
     name: string;
@@ -100,11 +125,17 @@ type ActivityRow = {
   id: string;
   name: string | null;
   started_at: string;
+
   distance_m: number | null;
+
   moving_time_s: number | null;
+
   avg_pace_s_per_km: number | null;
+
   avg_hr: number | null;
+
   elevation_gain_m: number | null;
+
   suffer_score: number | null;
 };
 
@@ -112,59 +143,176 @@ type ActivityRow = {
  * CONSTANTES
  * ========================================================= */
 
-const DAY_MS = 86400000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const DAYS_FOR_HISTORY = 84;
+
+/* =========================================================
+ * ESTADO VACÍO
+ * ========================================================= */
+
+const EMPTY: Omit<DashboardData, "loading"> = {
+  hasActivities: false,
+
+  metrics: [],
+
+  loadSeries: [],
+
+  paceSeries: [],
+
+  volumeSeries: [],
+
+  zoneSplit: [],
+
+  workouts: [],
+
+  predictions: [],
+
+  goals: [],
+
+  insights: [],
+
+  currentWeek: {
+    start: "",
+    end: "",
+    label: "",
+  },
+
+  previousWeek: {
+    start: "",
+    end: "",
+    label: "",
+  },
+
+  nextRace: null,
+};
 
 /* =========================================================
  * FECHAS
  * ========================================================= */
 
+/**
+ * Devuelve una copia de la fecha a las 00:00:00.000
+ * en la zona horaria LOCAL del navegador.
+ */
 function startOfDay(date: Date): Date {
-  const d = new Date(date);
+  const result = new Date(date);
 
-  d.setHours(0, 0, 0, 0);
+  result.setHours(0, 0, 0, 0);
 
-  return d;
+  return result;
 }
 
+/**
+ * Devuelve el lunes 00:00 de la semana de la fecha indicada.
+ *
+ * JS:
+ *
+ * domingo = 0
+ * lunes   = 1
+ * martes  = 2
+ * ...
+ */
 function startOfWeek(date: Date): Date {
-  const d = startOfDay(date);
+  const result = startOfDay(date);
 
-  /*
-   * Semana empieza en lunes.
-   *
-   * JS:
-   * domingo = 0
-   * lunes = 1
-   * ...
-   */
+  const day = result.getDay();
 
-  const daysSinceMonday =
-    (d.getDay() + 6) % 7;
+  const daysSinceMonday = (day + 6) % 7;
 
-  d.setDate(
-    d.getDate() - daysSinceMonday,
+  result.setDate(
+    result.getDate() - daysSinceMonday,
   );
 
-  return d;
+  return result;
+}
+
+/**
+ * Añade días respetando la zona horaria local.
+ *
+ * Es preferible a sumar directamente DAY_MS para
+ * calcular límites de calendario, porque así evitamos
+ * problemas alrededor de cambios de horario.
+ */
+function addDays(
+  date: Date,
+  days: number,
+): Date {
+  const result = new Date(date);
+
+  result.setDate(
+    result.getDate() + days,
+  );
+
+  return result;
+}
+
+/**
+ * Formato de fecha para mostrar al usuario.
+ */
+function formatDateShort(
+  date: Date,
+): string {
+  return date.toLocaleDateString(
+    "es-ES",
+    {
+      day: "numeric",
+      month: "short",
+    },
+  );
+}
+
+/**
+ * Formato:
+ *
+ * 3 ago – 9 ago
+ */
+function formatWeekLabel(
+  start: Date,
+  endExclusive: Date,
+): string {
+  const end = addDays(
+    endExclusive,
+    -1,
+  );
+
+  return `${formatDateShort(
+    start,
+  )} – ${formatDateShort(end)}`;
+}
+
+/**
+ * Convierte una fecha local en ISO.
+ *
+ * new Date().toISOString() representa el instante
+ * correcto en UTC, pero conserva el instante local
+ * que hemos definido.
+ */
+function toISOString(
+  date: Date,
+): string {
+  return date.toISOString();
+}
+
+/* =========================================================
+ * VALIDACIÓN NUMÉRICA
+ * ========================================================= */
+
+function finiteNumber(
+  value: unknown,
+  fallback = 0,
+): number {
+  const number = Number(value);
+
+  return Number.isFinite(number)
+    ? number
+    : fallback;
 }
 
 /* =========================================================
  * PORCENTAJES
  * ========================================================= */
 
-/**
- * Calcula el porcentaje de cambio entre dos valores.
- *
- * Si previous <= 0 no existe una referencia válida.
- *
- * En ese caso devolvemos null.
- *
- * Esto evita mostrar:
- *
- * "0%"
- *
- * cuando realmente no tenemos semana anterior.
- */
 function percentage(
   current: number,
   previous: number,
@@ -178,12 +326,14 @@ function percentage(
   }
 
   return Math.round(
-    ((current - previous) / previous) * 100,
+    ((current - previous) /
+      previous) *
+      100,
   );
 }
 
 /* =========================================================
- * FORMATO DURACIÓN
+ * DURACIÓN
  * ========================================================= */
 
 function formatDuration(
@@ -196,26 +346,28 @@ function formatDuration(
     return "0m";
   }
 
-  const h = Math.floor(
-    seconds / 3600,
+  const totalMinutes = Math.round(
+    seconds / 60,
   );
 
-  const m = Math.round(
-    (seconds % 3600) / 60,
+  const hours = Math.floor(
+    totalMinutes / 60,
   );
 
-  if (h > 0) {
-    return `${h}h ${String(m).padStart(
-      2,
-      "0",
-    )}m`;
+  const minutes =
+    totalMinutes % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${String(
+      minutes,
+    ).padStart(2, "0")}m`;
   }
 
-  return `${m}m`;
+  return `${minutes}m`;
 }
 
 /* =========================================================
- * FORMATO RITMO
+ * RITMO
  * ========================================================= */
 
 function formatPace(
@@ -245,49 +397,7 @@ function formatPace(
 }
 
 /* =========================================================
- * CARGA DE ACTIVIDAD
- * ========================================================= */
-
-/**
- * Carga basada exclusivamente en datos reales.
- *
- * Prioridad:
- *
- * 1. suffer_score real de Supabase.
- * 2. tiempo en movimiento real como aproximación.
- *
- * Nunca genera números aleatorios.
- */
-function activityLoad(
-  activity: ActivityRow,
-): number {
-  const suffer = Number(
-    activity.suffer_score ?? 0,
-  );
-
-  if (
-    Number.isFinite(suffer) &&
-    suffer > 0
-  ) {
-    return suffer;
-  }
-
-  const movingTime = Number(
-    activity.moving_time_s ?? 0,
-  );
-
-  if (
-    Number.isFinite(movingTime) &&
-    movingTime > 0
-  ) {
-    return movingTime / 60;
-  }
-
-  return 0;
-}
-
-/* =========================================================
- * VALIDACIÓN DE ACTIVIDADES
+ * ACTIVIDAD VÁLIDA
  * ========================================================= */
 
 function isValidActivity(
@@ -297,21 +407,28 @@ function isValidActivity(
     activity.started_at,
   );
 
-  if (!Number.isFinite(date.getTime())) {
+  if (
+    !Number.isFinite(
+      date.getTime(),
+    )
+  ) {
     return false;
   }
 
-  const distance = Number(
-    activity.distance_m ?? 0,
+  const distance = finiteNumber(
+    activity.distance_m,
   );
 
-  const movingTime = Number(
-    activity.moving_time_s ?? 0,
+  const movingTime = finiteNumber(
+    activity.moving_time_s,
   );
 
-  /*
-   * Una actividad tiene que tener al menos
-   * distancia o tiempo real.
+  /**
+   * Una actividad válida necesita:
+   *
+   * - distancia > 0
+   * O
+   * - tiempo > 0
    */
   return (
     distance > 0 ||
@@ -320,25 +437,40 @@ function isValidActivity(
 }
 
 /* =========================================================
- * ESTADO VACÍO
+ * CARGA
  * ========================================================= */
 
-const EMPTY: Omit<
-  DashboardData,
-  "loading"
-> = {
-  hasActivities: false,
-  metrics: [],
-  loadSeries: [],
-  paceSeries: [],
-  volumeSeries: [],
-  zoneSplit: [],
-  workouts: [],
-  predictions: [],
-  goals: [],
-  insights: [],
-  nextRace: null,
-};
+function activityLoad(
+  activity: ActivityRow,
+): number {
+  const suffer = finiteNumber(
+    activity.suffer_score,
+  );
+
+  /**
+   * Preferimos suffer_score real.
+   */
+  if (suffer > 0) {
+    return suffer;
+  }
+
+  /**
+   * Si no existe, usamos minutos en movimiento
+   * como aproximación.
+   *
+   * No es una carga fisiológica perfecta,
+   * pero evita inventar valores.
+   */
+  const movingTime = finiteNumber(
+    activity.moving_time_s,
+  );
+
+  if (movingTime > 0) {
+    return movingTime / 60;
+  }
+
+  return 0;
+}
 
 /* =========================================================
  * HOOK PRINCIPAL
@@ -373,7 +505,8 @@ export function useDashboardData(): DashboardData {
           );
         }
 
-        const user = authData.user;
+        const user =
+          authData.user;
 
         if (!user) {
           if (!cancelled) {
@@ -387,31 +520,99 @@ export function useDashboardData(): DashboardData {
         }
 
         /* =================================================
-         * FECHAS
+         * FECHA ACTUAL
          * ================================================= */
 
         const now = new Date();
 
+        /*
+         * Semana actual:
+         *
+         * lunes 00:00
+         */
         const currentWeekStart =
           startOfWeek(now);
 
         /*
-         * Necesitamos:
+         * Siguiente lunes.
          *
-         * - semana actual
-         * - semana anterior
-         * - histórico para CTL/ATL
-         *
-         * 8 semanas reales.
+         * Este será el límite EXCLUSIVO.
          */
+        const nextWeekStart =
+          addDays(
+            currentWeekStart,
+            7,
+          );
 
-        const since = new Date(
-          currentWeekStart.getTime() -
-            7 * 7 * DAY_MS,
-        ).toISOString();
+        /*
+         * Semana anterior.
+         */
+        const previousWeekStart =
+          addDays(
+            currentWeekStart,
+            -7,
+          );
+
+        /*
+         * Semana anterior termina exactamente
+         * cuando empieza la actual.
+         */
+        const previousWeekEnd =
+          currentWeekStart;
+
+        /*
+         * Para el dashboard necesitamos histórico.
+         *
+         * Empezamos antes de la semana actual.
+         */
+        const historyStart =
+          addDays(
+            currentWeekStart,
+            -DAYS_FOR_HISTORY,
+          );
 
         /* =================================================
-         * SUPABASE
+         * RANGOS VISIBLES
+         * ================================================= */
+
+        const currentWeekRange: WeekRange = {
+          start: toISOString(
+            currentWeekStart,
+          ),
+
+          end: toISOString(
+            addDays(
+              nextWeekStart,
+              -1,
+            ),
+          ),
+
+          label: formatWeekLabel(
+            currentWeekStart,
+            nextWeekStart,
+          ),
+        };
+
+        const previousWeekRange: WeekRange = {
+          start: toISOString(
+            previousWeekStart,
+          ),
+
+          end: toISOString(
+            addDays(
+              previousWeekEnd,
+              -1,
+            ),
+          ),
+
+          label: formatWeekLabel(
+            previousWeekStart,
+            previousWeekEnd,
+          ),
+        };
+
+        /* =================================================
+         * CONSULTA SUPABASE
          * ================================================= */
 
         const [
@@ -433,14 +634,19 @@ export function useDashboardData(): DashboardData {
                 suffer_score
               `,
             )
-            .eq("user_id", user.id)
+            .eq(
+              "user_id",
+              user.id,
+            )
             .gte(
               "started_at",
-              since,
+              toISOString(
+                historyStart,
+              ),
             )
             .lte(
               "started_at",
-              now.toISOString(),
+              toISOString(now),
             )
             .order(
               "started_at",
@@ -451,8 +657,13 @@ export function useDashboardData(): DashboardData {
 
           supabase
             .from("profiles")
-            .select("max_hr")
-            .eq("id", user.id)
+            .select(
+              "max_hr",
+            )
+            .eq(
+              "id",
+              user.id,
+            )
             .maybeSingle(),
         ]);
 
@@ -475,53 +686,91 @@ export function useDashboardData(): DashboardData {
         }
 
         /* =================================================
-         * ACTIVIDADES REALES
+         * ACTIVIDADES
          * ================================================= */
 
         const rawActivities =
-  (activitiesRes.data ?? []) as ActivityRow[];
+          (activitiesRes.data ??
+            []) as ActivityRow[];
 
-const activities =
-  rawActivities.filter(
-    isValidActivity,
-  );
-
-console.table(
-  activities.map((activity) => ({
-    id: activity.id,
-    name: activity.name,
-    date: activity.started_at,
-    km:
-      Number(activity.distance_m ?? 0) / 1000,
-    time:
-      Number(activity.moving_time_s ?? 0),
-    pace:
-      activity.avg_pace_s_per_km,
-    hr:
-      activity.avg_hr,
-    suffer:
-      activity.suffer_score,
-  })),
-);
-
-        /*
-         * IMPORTANTE:
-         *
-         * Desde aquí abajo solo trabajamos
-         * con actividades reales y válidas.
+        /**
+         * Validamos.
          */
+        const activities =
+          rawActivities.filter(
+            isValidActivity,
+          );
 
-        const maxHr =
-          profileRes.data?.max_hr !=
-          null
-            ? Number(
-                profileRes.data.max_hr,
-              )
-            : null;
+        /**
+         * Orden cronológico ascendente para cálculos.
+         */
+        activities.sort(
+          (a, b) =>
+            new Date(
+              a.started_at,
+            ).getTime() -
+            new Date(
+              b.started_at,
+            ).getTime(),
+        );
 
         /* =================================================
-         * FUNCIONES AUXILIARES
+         * DEBUG
          * ================================================= */
+
+        console.group(
+          "DASHBOARD · ACTIVIDADES",
+        );
+
+        console.table(
+          activities.map(
+            (activity) => ({
+              id: activity.id,
+
+              fecha:
+                activity.started_at,
+
+              km: Number(
+                (
+                  finiteNumber(
+                    activity.distance_m,
+                  ) / 1000
+                ).toFixed(2),
+              ),
+
+              tiempo:
+                finiteNumber(
+                  activity.moving_time_s,
+                ),
+
+              ritmo:
+                activity.avg_pace_s_per_km,
+
+              fc:
+                activity.avg_hr,
+
+              desnivel:
+                activity.elevation_gain_m,
+
+              carga:
+                activity.suffer_score,
+            }),
+          ),
+        );
+
+        console.groupEnd();
+
+        /* =================================================
+         * FUNCIONES DE FILTRADO
+         * ================================================= */
+
+        function activityTimestamp(
+          activity: ActivityRow,
+        ): number {
+          return new Date(
+            activity.started_at,
+          ).getTime();
+        }
 
         function isBetween(
           activity: ActivityRow,
@@ -529,9 +778,17 @@ console.table(
           to: Date,
         ): boolean {
           const timestamp =
-            new Date(
-              activity.started_at,
-            ).getTime();
+            activityTimestamp(
+              activity,
+            );
+
+          if (
+            !Number.isFinite(
+              timestamp,
+            )
+          ) {
+            return false;
+          }
 
           return (
             timestamp >=
@@ -541,6 +798,131 @@ console.table(
           );
         }
 
+        /* =================================================
+         * SEMANA ACTUAL
+         * ================================================= */
+
+        const thisWeek =
+          activities.filter(
+            (activity) =>
+              isBetween(
+                activity,
+                currentWeekStart,
+                nextWeekStart,
+              ) &&
+              activityTimestamp(
+                activity,
+              ) <= now.getTime(),
+          );
+
+        /* =================================================
+         * SEMANA ANTERIOR
+         * ================================================= */
+
+        const previousWeek =
+          activities.filter(
+            (activity) =>
+              isBetween(
+                activity,
+                previousWeekStart,
+                previousWeekEnd,
+              ),
+          );
+
+        /* =================================================
+         * DEBUG SEMANAL
+         * ================================================= */
+
+        console.group(
+          "DASHBOARD · COMPARACIÓN SEMANAL",
+        );
+
+        console.log(
+          "Semana actual:",
+          currentWeekRange.label,
+        );
+
+        console.log(
+          "Semana anterior:",
+          previousWeekRange.label,
+        );
+
+        console.table(
+          thisWeek.map(
+            (activity) => ({
+              fecha:
+                activity.started_at,
+
+              km: Number(
+                (
+                  finiteNumber(
+                    activity.distance_m,
+                  ) / 1000
+                ).toFixed(2),
+              ),
+            }),
+          ),
+        );
+
+        console.log(
+          "Sesiones semana actual:",
+          thisWeek.length,
+        );
+
+        console.log(
+          "KM semana actual:",
+          thisWeek.reduce(
+            (total, activity) =>
+              total +
+              finiteNumber(
+                activity.distance_m,
+              ) /
+                1000,
+            0,
+          ),
+        );
+
+        console.table(
+          previousWeek.map(
+            (activity) => ({
+              fecha:
+                activity.started_at,
+
+              km: Number(
+                (
+                  finiteNumber(
+                    activity.distance_m,
+                  ) / 1000
+                ).toFixed(2),
+              ),
+            }),
+          ),
+        );
+
+        console.log(
+          "Sesiones semana anterior:",
+          previousWeek.length,
+        );
+
+        console.log(
+          "KM semana anterior:",
+          previousWeek.reduce(
+            (total, activity) =>
+              total +
+              finiteNumber(
+                activity.distance_m,
+              ) /
+                1000,
+            0,
+          ),
+        );
+
+        console.groupEnd();
+
+        /* =================================================
+         * FUNCIONES DE SUMA
+         * ================================================= */
+
         function sum(
           rows: ActivityRow[],
           getter: (
@@ -549,65 +931,16 @@ console.table(
         ): number {
           return rows.reduce(
             (total, activity) => {
-              const value = Number(
-                getter(activity),
-              );
+              const value =
+                finiteNumber(
+                  getter(activity),
+                );
 
-              return (
-                total +
-                (Number.isFinite(value)
-                  ? value
-                  : 0)
-              );
+              return total + value;
             },
             0,
           );
         }
-
-        /* =================================================
-         * ESTA SEMANA / SEMANA ANTERIOR
-         * ================================================= */
-
-        const weekStart =
-          currentWeekStart;
-
-        const previousWeekStart =
-          new Date(
-            weekStart.getTime() -
-              7 * DAY_MS,
-          );
-
-        /*
-         * Semana actual:
-         *
-         * lunes 00:00 -> ahora
-         */
-
-        const thisWeek =
-          activities.filter(
-            (activity) =>
-              isBetween(
-                activity,
-                weekStart,
-                now,
-              ),
-          );
-
-        /*
-         * Semana anterior:
-         *
-         * lunes anterior -> lunes actual
-         */
-
-        const previousWeek =
-          activities.filter(
-            (activity) =>
-              isBetween(
-                activity,
-                previousWeekStart,
-                weekStart,
-              ),
-          );
 
         /* =================================================
          * DISTANCIA
@@ -617,9 +950,8 @@ console.table(
           sum(
             thisWeek,
             (activity) =>
-              Number(
-                activity.distance_m ??
-                  0,
+              finiteNumber(
+                activity.distance_m,
               ),
           ) / 1000;
 
@@ -627,9 +959,8 @@ console.table(
           sum(
             previousWeek,
             (activity) =>
-              Number(
-                activity.distance_m ??
-                  0,
+              finiteNumber(
+                activity.distance_m,
               ),
           ) / 1000;
 
@@ -641,9 +972,8 @@ console.table(
           sum(
             thisWeek,
             (activity) =>
-              Number(
-                activity.moving_time_s ??
-                  0,
+              finiteNumber(
+                activity.moving_time_s,
               ),
           );
 
@@ -651,9 +981,8 @@ console.table(
           sum(
             previousWeek,
             (activity) =>
-              Number(
-                activity.moving_time_s ??
-                  0,
+              finiteNumber(
+                activity.moving_time_s,
               ),
           );
 
@@ -665,9 +994,8 @@ console.table(
           sum(
             thisWeek,
             (activity) =>
-              Number(
-                activity.elevation_gain_m ??
-                  0,
+              finiteNumber(
+                activity.elevation_gain_m,
               ),
           );
 
@@ -675,135 +1003,316 @@ console.table(
           sum(
             previousWeek,
             (activity) =>
-              Number(
-                activity.elevation_gain_m ??
-                  0,
+              finiteNumber(
+                activity.elevation_gain_m,
               ),
           );
 
         /* =================================================
-         * RITMO MEDIO
+         * RITMO PONDERADO
          * ================================================= */
 
-        /*
-         * Ritmo ponderado:
+        /**
+         * NO hacemos:
          *
-         * tiempo total / distancia total
+         * (ritmo1 + ritmo2 + ritmo3) / 3
          *
-         * Esto es mejor que hacer una media simple
-         * de los ritmos individuales.
+         * porque eso distorsiona el resultado.
+         *
+         * Hacemos:
+         *
+         * tiempo total / km totales
          */
-
         const paceThis =
-          kmThis > 0
+          kmThis > 0 &&
+          timeThis > 0
             ? timeThis / kmThis
             : 0;
 
         const pacePrevious =
-          kmPrevious > 0
+          kmPrevious > 0 &&
+          timePrevious > 0
             ? timePrevious /
               kmPrevious
             : 0;
+
+        /* =================================================
+         * FC MEDIA PONDERADA
+         * ================================================= */
+
+        function weightedAverageHr(
+          rows: ActivityRow[],
+        ): number {
+          let weightedSum = 0;
+
+          let totalTime = 0;
+
+          for (const activity of rows) {
+            const hr =
+              finiteNumber(
+                activity.avg_hr,
+              );
+
+            const seconds =
+              finiteNumber(
+                activity.moving_time_s,
+              );
+
+            if (
+              hr > 0 &&
+              seconds > 0
+            ) {
+              weightedSum +=
+                hr * seconds;
+
+              totalTime +=
+                seconds;
+            }
+          }
+
+          if (totalTime <= 0) {
+            return 0;
+          }
+
+          return (
+            weightedSum /
+            totalTime
+          );
+        }
+
+        const hrThis =
+          weightedAverageHr(
+            thisWeek,
+          );
+
+        const hrPrevious =
+          weightedAverageHr(
+            previousWeek,
+          );
+
+        /* =================================================
+         * CARGA SEMANAL
+         * ================================================= */
+
+        const loadThis =
+          Math.round(
+            sum(
+              thisWeek,
+              activityLoad,
+            ),
+          );
+
+        const loadPrevious =
+          Math.round(
+            sum(
+              previousWeek,
+              activityLoad,
+            ),
+          );
 
         /* =================================================
          * MÉTRICAS
          * ================================================= */
 
         const metrics: Metric[] = [
-  {
-    id: "km",
-    label: "Distancia semanal",
-    value: kmThis.toFixed(1),
-    unit: "km",
-    hint:
-      previousWeek.length > 0
-        ? `${thisWeek.length} ${
-            thisWeek.length === 1
-              ? "sesión"
-              : "sesiones"
-          } · semana anterior ${kmPrevious.toFixed(1)} km`
-        : `${thisWeek.length} ${
-            thisWeek.length === 1
-              ? "sesión"
-              : "sesiones"
-          } · sin semana anterior`,
-    delta: percentage(
-      kmThis,
-      kmPrevious,
-    ),
-  },
+          {
+            id: "distance",
 
-  {
-    id: "pace",
-    label: "Ritmo medio",
-    value:
-      paceThis > 0
-        ? formatPace(paceThis)
-        : "0:00",
-    unit: "/km",
-    hint:
-      pacePrevious > 0
-        ? `Semana anterior ${formatPace(
-            pacePrevious,
-          )} /km`
-        : "Sin referencia previa",
-    delta:
-      pacePrevious > 0 && paceThis > 0
-        ? -percentage(
-            paceThis,
-            pacePrevious,
-          )!
-        : null,
-  },
+            label: "Distancia",
 
-  {
-    id: "time",
-    label: "Tiempo en movimiento",
-    value:
-      timeThis > 0
-        ? formatDuration(timeThis)
-        : "0m",
-    hint:
-      timePrevious > 0
-        ? `Semana anterior ${formatDuration(
-            timePrevious,
-          )}`
-        : "Sin referencia previa",
-    delta: percentage(
-      timeThis,
-      timePrevious,
-    ),
-  },
+            value:
+              kmThis.toFixed(1),
 
-  {
-    id: "elevation",
-    label: "Desnivel positivo",
-    value: Math.round(
-      elevationThis,
-    ).toString(),
-    unit: "m",
-    hint:
-      previousWeek.length > 0
-        ? `Semana anterior ${Math.round(
-            elevationPrevious,
-          )} m`
-        : "Sin semana anterior",
-    delta: percentage(
-      elevationThis,
-      elevationPrevious,
-    ),
-  },
-];
+            unit: "km",
+
+            hint:
+              previousWeek.length >
+              0
+                ? `antes ${kmPrevious.toFixed(
+                    1,
+                  )} km`
+                : "sin semana anterior",
+
+            delta: percentage(
+              kmThis,
+              kmPrevious,
+            ),
+          },
+
+          {
+            id: "sessions",
+
+            label: "Sesiones",
+
+            value:
+              thisWeek.length.toString(),
+
+            hint:
+              previousWeek.length >
+              0
+                ? `antes ${previousWeek.length}`
+                : "sin semana anterior",
+
+            delta: percentage(
+              thisWeek.length,
+              previousWeek.length,
+            ),
+          },
+
+          {
+            id: "time",
+
+            label: "Tiempo",
+
+            value:
+              formatDuration(
+                timeThis,
+              ),
+
+            hint:
+              timePrevious > 0
+                ? `antes ${formatDuration(
+                    timePrevious,
+                  )}`
+                : "sin semana anterior",
+
+            delta: percentage(
+              timeThis,
+              timePrevious,
+            ),
+          },
+
+          {
+            id: "elevation",
+
+            label: "Desnivel",
+
+            value:
+              Math.round(
+                elevationThis,
+              ).toString(),
+
+            unit: "m",
+
+            hint:
+              previousWeek.length >
+              0
+                ? `antes ${Math.round(
+                    elevationPrevious,
+                  )} m`
+                : "sin semana anterior",
+
+            delta: percentage(
+              elevationThis,
+              elevationPrevious,
+            ),
+          },
+
+          {
+            id: "pace",
+
+            label: "Ritmo medio",
+
+            value:
+              paceThis > 0
+                ? formatPace(
+                    paceThis,
+                  )
+                : "—",
+
+            unit: "/km",
+
+            hint:
+              pacePrevious > 0
+                ? `antes ${formatPace(
+                    pacePrevious,
+                  )} /km`
+                : "sin semana anterior",
+
+            /**
+             * En ritmo:
+             *
+             * - menor es mejor
+             * - 5:00 -> 4:45 = +5%
+             *
+             * Por eso invertimos el signo.
+             */
+            delta:
+              paceThis > 0 &&
+              pacePrevious > 0
+                ? -(
+                    percentage(
+                      paceThis,
+                      pacePrevious,
+                    ) ?? 0
+                  )
+                : null,
+          },
+
+          {
+            id: "hr",
+
+            label: "FC media",
+
+            value:
+              hrThis > 0
+                ? Math.round(
+                    hrThis,
+                  ).toString()
+                : "—",
+
+            unit: "bpm",
+
+            hint:
+              hrPrevious > 0
+                ? `antes ${Math.round(
+                    hrPrevious,
+                  )} bpm`
+                : "sin semana anterior",
+
+            delta:
+              hrThis > 0 &&
+              hrPrevious > 0
+                ? percentage(
+                    hrThis,
+                    hrPrevious,
+                  )
+                : null,
+          },
+
+          {
+            id: "load",
+
+            label: "Carga",
+
+            value:
+              loadThis.toString(),
+
+            hint:
+              previousWeek.length >
+              0
+                ? `antes ${loadPrevious}`
+                : "sin semana anterior",
+
+            delta: percentage(
+              loadThis,
+              loadPrevious,
+            ),
+          },
+        ];
 
         /* =================================================
-         * CARGA / FORMA / FATIGA
+         * CARGA DIARIA
          * ================================================= */
 
         const dailyLoad =
-          new Map<number, number>();
+          new Map<
+            number,
+            number
+          >();
 
         for (const activity of activities) {
-          const activityDate =
+          const date =
             startOfDay(
               new Date(
                 activity.started_at,
@@ -811,28 +1320,32 @@ console.table(
             );
 
           const key =
-            activityDate.getTime();
+            date.getTime();
 
-          const previous =
-            dailyLoad.get(key) ?? 0;
+          const current =
+            dailyLoad.get(
+              key,
+            ) ?? 0;
 
           dailyLoad.set(
             key,
-            previous +
-              activityLoad(activity),
+            current +
+              activityLoad(
+                activity,
+              ),
           );
         }
 
-        /*
-         * Calculamos los últimos 8 semanas
-         * utilizando solamente carga real.
-         */
+        /* =================================================
+         * CTL / ATL
+         * ================================================= */
+
+        let ctl = 0;
+
+        let atl = 0;
 
         const today =
           startOfDay(now);
-
-        let ctl = 0;
-        let atl = 0;
 
         const daily: Array<{
           date: number;
@@ -841,46 +1354,57 @@ console.table(
           load: number;
         }> = [];
 
-        /*
-         * 56 días = 8 semanas.
-         *
-         * Empezamos desde el día más antiguo.
+        /**
+         * Calculamos suficiente histórico
+         * para que CTL no arranque de cero
+         * demasiado cerca de la fecha actual.
          */
+        const calculationStart =
+          addDays(
+            today,
+            -84,
+          );
 
         for (
-          let i = 56;
-          i >= 0;
-          i--
+          let cursor = new Date(
+            calculationStart,
+          );
+          cursor <= today;
+          cursor = addDays(
+            cursor,
+            1,
+          )
         ) {
           const day =
-            today.getTime() -
-            i * DAY_MS;
+            startOfDay(cursor);
+
+          const key =
+            day.getTime();
 
           const load =
-            dailyLoad.get(day) ?? 0;
+            dailyLoad.get(
+              key,
+            ) ?? 0;
 
-          /*
-           * CTL = carga crónica aproximada
-           * de 42 días.
+          /**
+           * CTL ~42 días.
            */
-
-          ctl =
-            ctl +
+          ctl +=
             (load - ctl) / 42;
 
-          /*
-           * ATL = carga aguda aproximada
-           * de 7 días.
+          /**
+           * ATL ~7 días.
            */
-
-          atl =
-            atl +
+          atl +=
             (load - atl) / 7;
 
           daily.push({
-            date: day,
+            date: key,
+
             ctl,
+
             atl,
+
             load,
           });
         }
@@ -893,31 +1417,29 @@ console.table(
           [];
 
         for (
-          let week = 7;
-          week >= 0;
-          week--
+          let weekOffset = 7;
+          weekOffset >= 0;
+          weekOffset--
         ) {
-          const weekStartDate =
-            new Date(
-              weekStart.getTime() -
-                week *
-                  7 *
-                  DAY_MS,
+          const seriesWeekStart =
+            addDays(
+              currentWeekStart,
+              -weekOffset * 7,
             );
 
-          const weekEndDate =
-            new Date(
-              weekStartDate.getTime() +
-                7 * DAY_MS,
+          const seriesWeekEnd =
+            addDays(
+              seriesWeekStart,
+              7,
             );
 
           const days =
             daily.filter(
               (day) =>
                 day.date >=
-                  weekStartDate.getTime() &&
+                  seriesWeekStart.getTime() &&
                 day.date <
-                  weekEndDate.getTime(),
+                  seriesWeekEnd.getTime(),
             );
 
           const load = Math.round(
@@ -940,7 +1462,7 @@ console.table(
 
           loadSeries.push({
             week:
-              weekStartDate.toLocaleDateString(
+              seriesWeekStart.toLocaleDateString(
                 "es-ES",
                 {
                   day: "2-digit",
@@ -966,7 +1488,7 @@ console.table(
         }
 
         /* =================================================
-         * RITMO Y VOLUMEN - ÚLTIMOS 7 DÍAS
+         * RITMO / VOLUMEN ÚLTIMOS 7 DÍAS
          * ================================================= */
 
         const paceSeries: PacePoint[] =
@@ -980,15 +1502,16 @@ console.table(
           i >= 0;
           i--
         ) {
-          const day = new Date(
-            today.getTime() -
-              i * DAY_MS,
-          );
+          const day =
+            addDays(
+              today,
+              -i,
+            );
 
           const nextDay =
-            new Date(
-              day.getTime() +
-                DAY_MS,
+            addDays(
+              day,
+              1,
             );
 
           const rows =
@@ -1005,9 +1528,8 @@ console.table(
             sum(
               rows,
               (activity) =>
-                Number(
-                  activity.distance_m ??
-                    0,
+                finiteNumber(
+                  activity.distance_m,
                 ),
             ) / 1000;
 
@@ -1015,19 +1537,14 @@ console.table(
             sum(
               rows,
               (activity) =>
-                Number(
-                  activity.moving_time_s ??
-                    0,
+                finiteNumber(
+                  activity.moving_time_s,
                 ),
             );
 
-          const hrRows =
-            rows.filter(
-              (activity) =>
-                Number(
-                  activity.avg_hr ??
-                    0,
-                ) > 0,
+          const hr =
+            weightedAverageHr(
+              rows,
             );
 
           const label =
@@ -1042,7 +1559,8 @@ console.table(
             day: label,
 
             ritmo:
-              km > 0
+              km > 0 &&
+              seconds > 0
                 ? Number(
                     (
                       seconds /
@@ -1053,18 +1571,8 @@ console.table(
                 : 0,
 
             fc:
-              hrRows.length > 0
-                ? Math.round(
-                    sum(
-                      hrRows,
-                      (activity) =>
-                        Number(
-                          activity.avg_hr ??
-                            0,
-                        ),
-                    ) /
-                      hrRows.length,
-                  )
+              hr > 0
+                ? Math.round(hr)
                 : 0,
           });
 
@@ -1078,8 +1586,17 @@ console.table(
         }
 
         /* =================================================
-         * ZONAS DE FRECUENCIA CARDÍACA
+         * ZONAS FC
          * ================================================= */
+
+        const maxHr =
+          profileRes.data?.max_hr !=
+          null
+            ? finiteNumber(
+                profileRes.data
+                  .max_hr,
+              )
+            : 0;
 
         let zoneSplit: ZoneSlice[] =
           [];
@@ -1087,20 +1604,18 @@ console.table(
         const hrActivities =
           activities.filter(
             (activity) =>
-              Number(
-                activity.avg_hr ??
-                  0,
+              finiteNumber(
+                activity.avg_hr,
               ) > 0 &&
-              Number(
-                activity.moving_time_s ??
-                  0,
+              finiteNumber(
+                activity.moving_time_s,
               ) > 0,
           );
 
         if (
-          maxHr &&
           maxHr > 0 &&
-          hrActivities.length > 0
+          hrActivities.length >
+            0
         ) {
           const buckets = [
             0,
@@ -1114,37 +1629,40 @@ console.table(
 
           for (const activity of hrActivities) {
             const avgHr =
-              Number(
-                activity.avg_hr ??
-                  0,
+              finiteNumber(
+                activity.avg_hr,
               );
 
             const ratio =
               avgHr / maxHr;
 
-            const zoneIndex =
-              ratio < 0.6
-                ? 0
-                : ratio < 0.7
-                  ? 1
-                  : ratio < 0.8
-                    ? 2
-                    : ratio < 0.9
-                      ? 3
-                      : 4;
+            let zoneIndex = 0;
+
+            if (ratio < 0.6) {
+              zoneIndex = 0;
+            } else if (
+              ratio < 0.7
+            ) {
+              zoneIndex = 1;
+            } else if (
+              ratio < 0.8
+            ) {
+              zoneIndex = 2;
+            } else if (
+              ratio < 0.9
+            ) {
+              zoneIndex = 3;
+            } else {
+              zoneIndex = 4;
+            }
 
             const seconds =
-              Number(
-                activity.moving_time_s ??
-                  0,
+              finiteNumber(
+                activity.moving_time_s,
               );
 
-            buckets[
-              zoneIndex
-            ] =
-              (buckets[
-                zoneIndex
-              ] ?? 0) + seconds;
+            buckets[zoneIndex] =
+              (buckets[zoneIndex] ?? 0) + seconds;
 
             totalSeconds +=
               seconds;
@@ -1161,7 +1679,8 @@ console.table(
                 }`,
 
                 pct:
-                  totalSeconds > 0
+                  totalSeconds >
+                  0
                     ? Math.round(
                         (value /
                           totalSeconds) *
@@ -1173,106 +1692,136 @@ console.table(
         }
 
         /* =================================================
-         * ENTRENAMIENTOS
+         * HISTORIAL DE ENTRENAMIENTOS
          * ================================================= */
 
-        const last7Days =
-          new Date(
-            now.getTime() -
-              7 * DAY_MS,
+        const last7DaysStart =
+          addDays(
+            now,
+            -7,
           );
 
         const workouts: WorkoutRow[] =
           activities
             .filter(
               (activity) =>
-                new Date(
-                  activity.started_at,
-                ).getTime() >=
-                last7Days.getTime(),
+                activityTimestamp(
+                  activity,
+                ) >=
+                  last7DaysStart.getTime() &&
+                activityTimestamp(
+                  activity,
+                ) <= now.getTime(),
             )
-            .slice(0, 10)
-            .map((activity) => {
-              const km =
-                Number(
-                  activity.distance_m ??
-                    0,
-                ) / 1000;
+            .sort(
+              (a, b) =>
+                activityTimestamp(
+                  b,
+                ) -
+                activityTimestamp(
+                  a,
+                ),
+            )
+            .slice(0, 100)
+            .map(
+              (activity) => {
+                const km =
+                  finiteNumber(
+                    activity.distance_m,
+                  ) / 1000;
 
-              const storedPace =
-                Number(
-                  activity.avg_pace_s_per_km ??
-                    0,
-                );
+                const storedPace =
+                  finiteNumber(
+                    activity.avg_pace_s_per_km,
+                  );
 
-              const paceSeconds =
-                storedPace > 0
-                  ? storedPace
-                  : km > 0
-                    ? Number(
-                        activity.moving_time_s ??
-                          0,
-                      ) / km
+                const movingTime =
+                  finiteNumber(
+                    activity.moving_time_s,
+                  );
+
+                const calculatedPace =
+                  km > 0 &&
+                  movingTime > 0
+                    ? movingTime /
+                      km
                     : 0;
 
-              return {
-                id: activity.id,
+                const paceSeconds =
+                  storedPace > 0
+                    ? storedPace
+                    : calculatedPace;
 
-                title:
-                  activity.name ??
-                  "Entrenamiento",
+                return {
+                  id: activity.id,
 
-                date: new Date(
-                  activity.started_at,
-                ).toLocaleDateString(
-                  "es-ES",
-                ),
+                  title:
+                    activity.name ??
+                    "Entrenamiento",
 
-                distance: `${km.toFixed(
-                  2,
-                )} km`,
+                  date:
+                    new Date(
+                      activity.started_at,
+                    ).toLocaleDateString(
+                      "es-ES",
+                    ),
 
-                pace:
-                  paceSeconds > 0
-                    ? `${formatPace(
-                        paceSeconds,
-                      )} /km`
-                    : "—",
+                  distance: `${km.toFixed(
+                    2,
+                  )} km`,
 
-                hr: Number(
-                  activity.avg_hr ??
-                    0,
-                ),
+                  pace:
+                    paceSeconds > 0
+                      ? `${formatPace(
+                          paceSeconds,
+                        )} /km`
+                      : "—",
 
-                effort:
-                  effortLabel(
-                    activity.suffer_score,
+                  hr: Math.round(
+                    finiteNumber(
+                      activity.avg_hr,
+                    ),
                   ),
-              };
-            });
+
+                  effort:
+                    effortLabel(
+                      activity.suffer_score,
+                    ),
+                };
+              },
+            );
 
         /* =================================================
          * DATOS NO DISPONIBLES
          * ================================================= */
 
-        /*
-         * No inventamos predicciones,
-         * objetivos, insights ni carreras.
+        /**
+         * No inventamos predicciones.
          */
-
         const predictions: PredictionRow[] =
           [];
 
-        const goals: GoalRow[] = [];
+        /**
+         * No inventamos objetivos.
+         */
+        const goals: GoalRow[] =
+          [];
 
+        /**
+         * No inventamos insights.
+         */
         const insights: InsightRow[] =
           [];
 
-        const nextRace: DashboardData["nextRace"] =
+        /**
+         * No inventamos carrera.
+         */
+        const nextRace:
+          DashboardData["nextRace"] =
           null;
 
         /* =================================================
-         * ACTUALIZAR ESTADO
+         * ESTADO FINAL
          * ================================================= */
 
         if (!cancelled) {
@@ -1300,6 +1849,12 @@ console.table(
             goals,
 
             insights,
+
+            currentWeek:
+              currentWeekRange,
+
+            previousWeek:
+              previousWeekRange,
 
             nextRace,
           });
@@ -1330,13 +1885,17 @@ console.table(
 }
 
 /* =========================================================
- * CONTEXTO DEL DASHBOARD
+ * CONTEXTO
  * ========================================================= */
 
 const DashboardDataContext =
-  createContext<DashboardData | null>(
-    null,
-  );
+  createContext<
+    DashboardData | null
+  >(null);
+
+/* =========================================================
+ * PROVIDER
+ * ========================================================= */
 
 export function DashboardDataProvider({
   children,
