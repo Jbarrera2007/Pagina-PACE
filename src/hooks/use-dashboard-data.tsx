@@ -479,13 +479,30 @@ export function useDashboardData(): DashboardData {
          * ================================================= */
 
         const rawActivities =
-          (activitiesRes.data ??
-            []) as ActivityRow[];
+  (activitiesRes.data ?? []) as ActivityRow[];
 
-        const activities =
-          rawActivities.filter(
-            isValidActivity,
-          );
+const activities =
+  rawActivities.filter(
+    isValidActivity,
+  );
+
+console.table(
+  activities.map((activity) => ({
+    id: activity.id,
+    name: activity.name,
+    date: activity.started_at,
+    km:
+      Number(activity.distance_m ?? 0) / 1000,
+    time:
+      Number(activity.moving_time_s ?? 0),
+    pace:
+      activity.avg_pace_s_per_km,
+    hr:
+      activity.avg_hr,
+    suffer:
+      activity.suffer_score,
+  })),
+);
 
         /*
          * IMPORTANTE:
