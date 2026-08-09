@@ -693,138 +693,90 @@ export function useDashboardData(): DashboardData {
          * ================================================= */
 
         const metrics: Metric[] = [
-          {
-            id: "km",
+  {
+    id: "km",
+    label: "Distancia semanal",
+    value: kmThis.toFixed(1),
+    unit: "km",
+    hint:
+      previousWeek.length > 0
+        ? `${thisWeek.length} ${
+            thisWeek.length === 1
+              ? "sesión"
+              : "sesiones"
+          } · semana anterior ${kmPrevious.toFixed(1)} km`
+        : `${thisWeek.length} ${
+            thisWeek.length === 1
+              ? "sesión"
+              : "sesiones"
+          } · sin semana anterior`,
+    delta: percentage(
+      kmThis,
+      kmPrevious,
+    ),
+  },
 
-            label:
-              "Distancia semanal",
+  {
+    id: "pace",
+    label: "Ritmo medio",
+    value:
+      paceThis > 0
+        ? formatPace(paceThis)
+        : "0:00",
+    unit: "/km",
+    hint:
+      pacePrevious > 0
+        ? `Semana anterior ${formatPace(
+            pacePrevious,
+          )} /km`
+        : "Sin referencia previa",
+    delta:
+      pacePrevious > 0 && paceThis > 0
+        ? -percentage(
+            paceThis,
+            pacePrevious,
+          )!
+        : null,
+  },
 
-            value:
-              kmThis.toFixed(1),
+  {
+    id: "time",
+    label: "Tiempo en movimiento",
+    value:
+      timeThis > 0
+        ? formatDuration(timeThis)
+        : "0m",
+    hint:
+      timePrevious > 0
+        ? `Semana anterior ${formatDuration(
+            timePrevious,
+          )}`
+        : "Sin referencia previa",
+    delta: percentage(
+      timeThis,
+      timePrevious,
+    ),
+  },
 
-            unit: "km",
-
-            hint:
-              previousWeek.length >
-              0
-                ? `${thisWeek.length} ${
-                    thisWeek.length ===
-                    1
-                      ? "sesión"
-                      : "sesiones"
-                  } · antes ${kmPrevious.toFixed(
-                    1,
-                  )} km`
-                : `${thisWeek.length} ${
-                    thisWeek.length ===
-                    1
-                      ? "sesión"
-                      : "sesiones"
-                  } · sin semana anterior`,
-
-            delta: percentage(
-              kmThis,
-              kmPrevious,
-            ),
-          },
-
-          {
-            id: "pace",
-
-            label: "Ritmo medio",
-
-            value:
-              paceThis > 0
-                ? formatPace(
-                    paceThis,
-                  )
-                : "0:00",
-
-            unit: "/km",
-
-            hint:
-              pacePrevious > 0
-                ? `Antes ${formatPace(
-                    pacePrevious,
-                  )} /km`
-                : "Sin referencia previa",
-
-            /*
-             * Para ritmo:
-             *
-             * - positivo = más lento
-             * - negativo = más rápido
-             *
-             * Por eso invertimos el porcentaje.
-             *
-             * Si no existe semana anterior:
-             * null.
-             */
-
-            delta:
-              pacePrevious > 0 &&
-              paceThis > 0
-                ? -(
-                    percentage(
-                      paceThis,
-                      pacePrevious,
-                    ) ?? 0
-                  )
-                : null,
-          },
-
-          {
-            id: "time",
-
-            label:
-              "Tiempo en movimiento",
-
-            value:
-              timeThis > 0
-                ? formatDuration(
-                    timeThis,
-                  )
-                : "0m",
-
-            hint:
-              timePrevious > 0
-                ? `Antes ${formatDuration(
-                    timePrevious,
-                  )}`
-                : "Sin referencia previa",
-
-            delta: percentage(
-              timeThis,
-              timePrevious,
-            ),
-          },
-
-          {
-            id: "elevation",
-
-            label:
-              "Desnivel positivo",
-
-            value: Math.round(
-              elevationThis,
-            ).toString(),
-
-            unit: "m",
-
-            hint:
-              previousWeek.length >
-              0
-                ? `Antes ${Math.round(
-                    elevationPrevious,
-                  )} m`
-                : "Sin semana anterior",
-
-            delta: percentage(
-              elevationThis,
-              elevationPrevious,
-            ),
-          },
-        ];
+  {
+    id: "elevation",
+    label: "Desnivel positivo",
+    value: Math.round(
+      elevationThis,
+    ).toString(),
+    unit: "m",
+    hint:
+      previousWeek.length > 0
+        ? `Semana anterior ${Math.round(
+            elevationPrevious,
+          )} m`
+        : "Sin semana anterior",
+    delta: percentage(
+      elevationThis,
+      elevationPrevious,
+    ),
+  },
+];
 
         /* =================================================
          * CARGA / FORMA / FATIGA
