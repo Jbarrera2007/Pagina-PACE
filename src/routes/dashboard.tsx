@@ -28,7 +28,6 @@ import {
   WorkoutsPanel,
   ZonesPanel,
 } from "@/components/dashboard/panels";
-import { PieDashboard } from "@/components/dashboard/pie";
 
 
 
@@ -116,7 +115,7 @@ function Dashboard() {
   function renderSection() {
     switch (section) {
       case "PACE IQ":
-        return <PieDashboard />;
+        return ;
       case "IA Coach":
         return <AiCoach />;
       case "Entrenamientos":
