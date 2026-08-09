@@ -419,3 +419,6 @@ export async function getRecentPieActivities(
  */
 export const PIE_TODAY = new Date();
 
+export const pieActivities = [
+  // tus actividades aquí
+];
