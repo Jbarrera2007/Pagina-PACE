@@ -12,17 +12,13 @@ import {
   Watch,
   Zap,
 } from "lucide-react";
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-} from "recharts";
 import { Reveal, SectionLabel } from "@/components/motion-primitives";
-import { predictions, loadSeries, volumeSeries, trainingPlans } from "@/lib/pace-data";
+// Catálogo real de planes que ofrece PACE (definición de producto, no datos de usuario).
+const trainingPlans = [
+  { name: "10K en 12 semanas", weeks: 12, level: "Intermedio" },
+  { name: "Media maratón en 16 semanas", weeks: 16, level: "Intermedio" },
+  { name: "Maratón en 20 semanas", weeks: 20, level: "Avanzado" },
+];
 
 function SectionHeader({
   label,
@@ -161,50 +157,22 @@ export function DashboardShowcase() {
                 <p className="text-sm font-medium">Carga vs Forma</p>
                 <span className="text-xs text-muted-foreground">Últimas 7 semanas</span>
               </div>
-              <div className="mt-4 h-56">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={loadSeries}>
-                    <defs>
-                      <linearGradient id="gCarga" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="var(--color-chart-1)" stopOpacity={0.5} />
-                        <stop offset="100%" stopColor="var(--color-chart-1)" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <XAxis
-                      dataKey="week"
-                      tickLine={false}
-                      axisLine={false}
-                      tick={{ fill: "var(--color-muted-foreground)", fontSize: 11 }}
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        background: "var(--color-popover)",
-                        border: "1px solid var(--color-border)",
-                        borderRadius: 12,
-                        fontSize: 12,
-                      }}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="carga"
-                      stroke="var(--color-chart-1)"
-                      strokeWidth={2}
-                      fill="url(#gCarga)"
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
+              <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
+                PACE calcula tu carga aguda y crónica a partir de cada sesión que sincronizas y te
+                muestra cómo evoluciona tu forma semana a semana. Sin estimaciones inventadas: solo
+                tus entrenamientos.
+              </p>
             </div>
             <div className="grid gap-4">
               {[
-                { icon: Activity, k: "62,4 km", v: "Volumen semanal" },
-                { icon: Zap, k: "58,3", v: "VO2 máx estimado" },
-                { icon: LineChart, k: "4:38 /km", v: "Ritmo medio" },
+                { icon: Activity, k: "Volumen semanal", v: "Kilómetros y tiempo reales de cada semana" },
+                { icon: Zap, k: "Carga y fatiga", v: "Calculadas con tus sesiones sincronizadas" },
+                { icon: LineChart, k: "Ritmo medio", v: "Media ponderada por distancia recorrida" },
               ].map((c) => (
-                <div key={c.v} className="rounded-2xl border border-border bg-background/60 p-5">
+                <div key={c.k} className="rounded-2xl border border-border bg-background/60 p-5">
                   <c.icon className="size-4 text-primary" />
-                  <p className="mt-4 font-display text-2xl font-semibold">{c.k}</p>
-                  <p className="text-xs text-muted-foreground">{c.v}</p>
+                  <p className="mt-4 font-display text-lg font-semibold">{c.k}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{c.v}</p>
                 </div>
               ))}
             </div>
@@ -242,16 +210,12 @@ export function AICoach() {
         </div>
         <Reveal delay={1}>
           <div className="surface-panel space-y-3 p-5">
-            <div className="rounded-2xl bg-secondary/60 p-4 text-sm">
-              <p className="text-xs text-muted-foreground">Tú</p>
-              <p className="mt-1">Llego cansado al jueves, ¿cambio las series?</p>
-            </div>
             <div className="rounded-2xl border border-border bg-background/70 p-4 text-sm">
               <p className="text-xs text-primary">PACE IA Coach</p>
               <p className="mt-1 leading-relaxed text-muted-foreground">
-                Tu HRV cayó un 9% y la carga aguda va 1,38× la crónica. Cambia 6 × 1000 m por 4 ×
-                1000 m a 3:55 con 3′ de recuperación y mueve el resto al sábado. Mantienes el
-                estímulo y bajas la fatiga a 24%.
+                El coach lee tus entrenamientos sincronizados, tu carga acumulada y tus objetivos, y
+                responde sobre tu situación concreta: qué sesión toca, a qué ritmo y por qué. Todas
+                sus respuestas parten de tus datos, nunca de ejemplos genéricos.
               </p>
             </div>
           </div>
@@ -269,55 +233,29 @@ export function Predictions() {
         title="Sabe tu marca antes de la salida."
         description="Modelo entrenado con millones de sesiones reales y calibrado con tu fisiología."
       />
-      <div className="mt-14 grid gap-4 md:grid-cols-4">
-        {predictions.map((p, i) => (
-          <Reveal key={p.distance} delay={i}>
-            <div className="surface-panel p-6">
-              <p className="text-xs uppercase tracking-widest text-muted-foreground">
-                {p.distance}
-              </p>
-              <p className="mt-3 font-display text-3xl font-semibold">{p.time}</p>
-              <div className="mt-4 h-1 w-full overflow-hidden rounded-full bg-secondary">
-                <motion.div
-                  initial={{ width: 0 }}
-                  whileInView={{ width: `${p.confidence}%` }}
-                  viewport={{ once: true }}
-                  transition={{ duration: 1, delay: 0.1 * i }}
-                  className="h-full rounded-full bg-primary"
-                />
-              </div>
-              <p className="mt-2 text-xs text-muted-foreground">{p.confidence}% de confianza</p>
+      <div className="mt-14 grid gap-4 md:grid-cols-3">
+        {[
+          {
+            title: "5K y 10K",
+            body: "Proyección a partir de tus mejores marcas y de tu ritmo sostenido reciente.",
+          },
+          {
+            title: "Media maratón",
+            body: "Ajustada con tu volumen semanal y tu resistencia en tiradas largas.",
+          },
+          {
+            title: "Maratón",
+            body: "Calibrada con la carga acumulada del ciclo y tu ritmo en rodajes largos.",
+          },
+        ].map((p, i) => (
+          <Reveal key={p.title} delay={i}>
+            <div className="surface-panel h-full p-6">
+              <p className="text-xs uppercase tracking-widest text-muted-foreground">{p.title}</p>
+              <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{p.body}</p>
             </div>
           </Reveal>
         ))}
       </div>
-      <Reveal delay={2}>
-        <div className="surface-panel mt-4 p-6">
-          <p className="text-sm font-medium">Volumen semanal</p>
-          <div className="mt-4 h-40">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={volumeSeries}>
-                <XAxis
-                  dataKey="day"
-                  tickLine={false}
-                  axisLine={false}
-                  tick={{ fill: "var(--color-muted-foreground)", fontSize: 11 }}
-                />
-                <Tooltip
-                  cursor={{ fill: "var(--color-secondary)" }}
-                  contentStyle={{
-                    background: "var(--color-popover)",
-                    border: "1px solid var(--color-border)",
-                    borderRadius: 12,
-                    fontSize: 12,
-                  }}
-                />
-                <Bar dataKey="km" fill="var(--color-chart-1)" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </Reveal>
     </section>
   );
 }
@@ -337,7 +275,7 @@ export function Plans() {
                 <CalendarCheck className="size-5 text-primary" />
                 <h3 className="mt-5 text-lg font-semibold">{p.name}</h3>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  {p.weeks} semanas · {p.sessions} sesiones/semana
+                  {p.weeks} semanas
                 </p>
                 <p className="mt-6 text-xs uppercase tracking-widest text-muted-foreground">
                   {p.level}

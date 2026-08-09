@@ -1,7 +1,3 @@
-CREANDO src/lib/supabase.ts
-import { createClient } from "@supabase/supabase-js";
-
-export const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-ECHO est� desactivado.
+// Cliente único de la app. Reexporta el cliente generado por la integración
+// para que no existan dos instancias distintas con credenciales diferentes.
+export { supabase } from "@/integrations/supabase/client";

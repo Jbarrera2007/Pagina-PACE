@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
 import { useActivities } from "@/hooks/use-activities";
+import { useAuth } from "@/hooks/use-auth";
+import { supabase } from "@/integrations/supabase/client";
 import {
   
   Area,
@@ -311,11 +313,6 @@ function PremiumPanel({
       <header className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="flex items-center gap-2 text-sm font-medium">
           {title}
-          {locked && (
-            <span className="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-primary">
-              {label}
-            </span>
-          )}
         </h2>
         {subtitle && <span className="text-xs text-muted-foreground">{subtitle}</span>}
       </header>
@@ -495,26 +492,6 @@ export function TrainingsSection() {
         </div>
       </Panel>
 
-      <PremiumPanel
-        title="Análisis IA por entrenamiento"
-        subtitle="lectura del entrenador"
-        teaser="La IA analiza cada sesión: calidad del estímulo, coste cardíaco y qué hacer mañana."
-      >
-        <div className="space-y-2">
-          {[
-            { s: "Series 8 × 800 m", t: "Estímulo VO2 correcto. Deriva cardíaca del 3,1 %: aún tienes margen para bajar 4″/km." },
-            { s: "Tirada larga 26 km", t: "Últimos 6 km a +12″/km: aparece fatiga glucogénica, añade avituallamiento a partir del km 16." },
-            { s: "Tempo 25 min", t: "Ritmo umbral estable a 4:05. Sube a 27 min la próxima semana antes de tocar el ritmo." },
-          ].map((a) => (
-            <div key={a.s} className="rounded-2xl border border-border p-4">
-              <p className="flex items-center gap-2 text-sm font-medium">
-                <Zap className="size-3.5 text-primary" /> {a.s}
-              </p>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{a.t}</p>
-            </div>
-          ))}
-        </div>
-      </PremiumPanel>
     </div>
 
   );
@@ -522,113 +499,208 @@ export function TrainingsSection() {
 
 /* ---------------------------------- Planes --------------------------------- */
 
-interface PlanWeek {
-  semana: string;
-  km: number;
-  calidad: number;
+interface PlanRow {
+  id: string;
+  name: string;
+  weeks: number;
+  goal_race: string | null;
+  starts_on: string | null;
+  level: string | null;
 }
 
-interface WeekSession {
-  day: string;
+interface PlanSessionRow {
+  id: string;
   title: string;
-  detail: string;
+  description: string | null;
+  week_number: number;
+  scheduled_on: string | null;
+  completed: boolean;
+  target_distance_m: number | null;
 }
-
-const planWeeks: PlanWeek[] = [];
-
-const weekSessions: WeekSession[] = [];
 
 export function PlansSection() {
+  const { user } = useAuth();
+  const [plan, setPlan] = useState<PlanRow | null>(null);
+  const [sessions, setSessions] = useState<PlanSessionRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user) {
+      setPlan(null);
+      setSessions([]);
+      setLoading(false);
+      return;
+    }
+    let alive = true;
+    void (async () => {
+      const { data: planRow } = await supabase
+        .from("training_plans")
+        .select("id,name,weeks,goal_race,starts_on,level")
+        .eq("user_id", user.id)
+        .eq("is_active", true)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!alive) return;
+      setPlan((planRow as PlanRow | null) ?? null);
+      if (planRow) {
+        const { data: rows } = await supabase
+          .from("plan_sessions")
+          .select("id,title,description,week_number,scheduled_on,completed,target_distance_m")
+          .eq("plan_id", planRow.id)
+          .order("week_number", { ascending: true });
+        if (!alive) return;
+        setSessions((rows as PlanSessionRow[] | null) ?? []);
+      } else {
+        setSessions([]);
+      }
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [user]);
+
+  /** Kilómetros planificados por semana, sumando los objetivos reales de cada sesión. */
+  const planWeeks = useMemo(() => {
+    if (!plan) return [] as { semana: string; km: number; hechas: number }[];
+    const map = new Map<number, { km: number; hechas: number }>();
+    for (const s of sessions) {
+      const cur = map.get(s.week_number) ?? { km: 0, hechas: 0 };
+      cur.km += (s.target_distance_m ?? 0) / 1000;
+      if (s.completed) cur.hechas += 1;
+      map.set(s.week_number, cur);
+    }
+    return Array.from(map.entries())
+      .sort((x, y) => x[0] - y[0])
+      .map(([week, v]) => ({
+        semana: `S${week}`,
+        km: Number(v.km.toFixed(1)),
+        hechas: v.hechas,
+      }));
+  }, [plan, sessions]);
+
+  /** Semana en curso según la fecha de inicio real del plan. */
+  const currentWeek = useMemo(() => {
+    if (!plan?.starts_on) return null;
+    const start = new Date(`${plan.starts_on}T00:00:00`).getTime();
+    if (Number.isNaN(start)) return null;
+    const diff = Math.floor((Date.now() - start) / (7 * 86_400_000)) + 1;
+    if (diff < 1) return null;
+    return Math.min(diff, plan.weeks);
+  }, [plan]);
+
+  const weekSessions = useMemo(
+    () => (currentWeek ? sessions.filter((s) => s.week_number === currentWeek) : []),
+    [sessions, currentWeek],
+  );
+
+  const completed = sessions.filter((s) => s.completed).length;
+
+  if (loading) {
+    return (
+      <div className="surface-panel p-5 text-xs text-muted-foreground">Cargando tu plan…</div>
+    );
+  }
+
+  if (!plan) {
+    return (
+      <div className="surface-panel p-8 text-center">
+        <CalendarRange className="mx-auto size-5 text-primary" />
+        <p className="mt-3 text-sm font-medium">Todavía no tienes un plan activo</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Cuando crees o generes un plan de entrenamiento aparecerá aquí con sus semanas y sesiones
+          reales.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3">
       <div className="grid gap-3 xl:grid-cols-3">
-        <Panel title="Progresión del bloque" subtitle="Semana 6 de 18" className="xl:col-span-2">
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={planWeeks}>
-                <CartesianGrid stroke="var(--color-border)" vertical={false} />
-                <XAxis dataKey="semana" stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} />
-                <YAxis stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} width={34} />
-                <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "var(--color-secondary)" }} />
-                <Bar dataKey="km" radius={[8, 8, 0, 0]} barSize={26}>
-                  {planWeeks.map((w) => (
-                    <Cell
-                      key={w.semana}
-                      fill={w.calidad >= 3 ? "var(--color-primary)" : "var(--color-secondary)"}
-                    />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+        <Panel
+          title={plan.name}
+          subtitle={
+            currentWeek ? `Semana ${currentWeek} de ${plan.weeks}` : `${plan.weeks} semanas`
+          }
+          className="xl:col-span-2"
+        >
+          {planWeeks.length === 0 ? (
+            <p className="rounded-2xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
+              El plan aún no tiene sesiones con distancia objetivo.
+            </p>
+          ) : (
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={planWeeks}>
+                  <CartesianGrid stroke="var(--color-border)" vertical={false} />
+                  <XAxis dataKey="semana" stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} />
+                  <YAxis stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} width={34} />
+                  <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "var(--color-secondary)" }} />
+                  <Bar dataKey="km" radius={[8, 8, 0, 0]} barSize={26}>
+                    {planWeeks.map((w) => (
+                      <Cell
+                        key={w.semana}
+                        fill={w.hechas > 0 ? "var(--color-primary)" : "var(--color-secondary)"}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </Panel>
 
-        <Panel title="Planes disponibles">
-          <div className="space-y-2">
-            {[
-  {
-    name: "Media maratón sub 1:20",
-    weeks: 12,
-    sessions: 5,
-    level: "Avanzado",
-  },
-  {
-    name: "Maratón sub 3h",
-    weeks: 18,
-    sessions: 6,
-    level: "Avanzado",
-  },
-  {
-    name: "Mejora 5K",
-    weeks: 10,
-    sessions: 4,
-    level: "Intermedio",
-  },
-].map((p) => (
-  <div key={p.name} className="rounded-2xl border border-border p-4">
-    <div className="flex items-center gap-2">
-      <CalendarRange className="size-4 text-primary" />
-      <p className="text-sm font-medium">{p.name}</p>
-    </div>
-    <p className="mt-1 text-xs text-muted-foreground">
-      {p.weeks} semanas · {p.sessions} sesiones/sem · {p.level}
-    </p>
-  </div>
-))}
-          </div>
+        <Panel title="Detalles del plan">
+          <ul className="divide-y divide-border text-sm">
+            <li className="flex justify-between py-3">
+              <span className="text-muted-foreground">Objetivo</span>
+              <span className="font-medium">{plan.goal_race ?? "—"}</span>
+            </li>
+            <li className="flex justify-between py-3">
+              <span className="text-muted-foreground">Nivel</span>
+              <span className="font-medium">{plan.level ?? "—"}</span>
+            </li>
+            <li className="flex justify-between py-3">
+              <span className="text-muted-foreground">Inicio</span>
+              <span className="font-medium">
+                {plan.starts_on ? formatRaceDate(plan.starts_on) : "—"}
+              </span>
+            </li>
+            <li className="flex justify-between py-3">
+              <span className="text-muted-foreground">Sesiones completadas</span>
+              <span className="font-medium">
+                {completed} / {sessions.length}
+              </span>
+            </li>
+          </ul>
         </Panel>
       </div>
 
       <Panel
-        title="Plan adaptativo IA"
-        subtitle="se recalcula cada semana"
+        title="Semana actual"
+        subtitle={currentWeek ? `Semana ${currentWeek}` : "sin fecha de inicio"}
       >
-        <div className="grid gap-3 md:grid-cols-3">
-          {[
-            { t: "Ajuste de la semana", v: "−8 % de volumen por ACWR alto (1,42)" },
-            { t: "Sesión clave sustituida", v: "Series 8 × 800 → 6 × 1000 a umbral" },
-            { t: "Proyección al objetivo", v: "Sub 1:20 alcanzable en 9 semanas" },
-          ].map((x) => (
-            <div key={x.t} className="rounded-2xl border border-border p-4">
-              <p className="text-xs text-muted-foreground">{x.t}</p>
-              <p className="mt-2 text-sm font-medium">{x.v}</p>
-            </div>
-          ))}
-        </div>
-      </Panel>
-
-
-
-      <Panel title="Semana actual" subtitle="Bloque específico">
-        <div className="grid gap-2 md:grid-cols-7">
-          {weekSessions.map((s) => (
-            <div key={s.day} className="rounded-2xl border border-border p-3">
-              <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">{s.day}</p>
-              <p className="mt-2 text-sm font-medium">{s.title}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{s.detail}</p>
-            </div>
-          ))}
-        </div>
+        {weekSessions.length === 0 ? (
+          <p className="rounded-2xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
+            No hay sesiones planificadas para esta semana.
+          </p>
+        ) : (
+          <div className="grid gap-2 md:grid-cols-3">
+            {weekSessions.map((s) => (
+              <div key={s.id} className="rounded-2xl border border-border p-3">
+                <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+                  {s.scheduled_on ? formatRaceDate(s.scheduled_on) : `Semana ${s.week_number}`}
+                </p>
+                <p className="mt-2 text-sm font-medium">{s.title}</p>
+                {s.description && (
+                  <p className="mt-1 text-xs text-muted-foreground">{s.description}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </Panel>
     </div>
   );
@@ -1179,7 +1251,18 @@ export function CalculatorsSection() {
   const speed = total > 0 && distN > 0 ? ((distN / total) * 3600).toFixed(2) : "—";
 
 
-  const zones: HrZone[] = [];
+  // Zonas calculadas como porcentaje de la FC máxima introducida (método %FCmáx).
+  const zones: HrZone[] =
+    num(hrMax) > 0
+      ? [
+          { z: "Z1 · Recuperación", lo: 0.5, hi: 0.6 },
+          { z: "Z2 · Aeróbico", lo: 0.6, hi: 0.7 },
+          { z: "Z3 · Tempo", lo: 0.7, hi: 0.8 },
+          { z: "Z4 · Umbral", lo: 0.8, hi: 0.9 },
+          { z: "Z5 · VO2 máx", lo: 0.9, hi: 1 },
+        ]
+      : [];
+
 
   const inputCls =
     "w-full rounded-xl border border-border bg-background/60 px-3 py-2.5 text-sm outline-none transition-colors focus:border-primary";
@@ -1227,6 +1310,11 @@ export function CalculatorsSection() {
           FC máxima (bpm)
           <input type="number" inputMode="numeric" placeholder="190" value={hrMax} min={120} max={230} onChange={(e) => setHrMax(e.target.value)} className={`mt-1 ${inputCls}`} />
         </label>
+        {zones.length === 0 && (
+          <p className="mt-4 rounded-2xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
+            Introduce tu FC máxima para calcular tus zonas.
+          </p>
+        )}
         <div className="mt-4 space-y-2">
           {zones.map((z) => (
             <div key={z.z} className="flex items-center justify-between rounded-xl border border-border px-4 py-2.5 text-sm">
@@ -1270,13 +1358,6 @@ export function CalculatorsSection() {
 }
 
 /* -------------------------------- Estadísticas ------------------------------ */
-
-interface RadarPoint {
-  skill: string;
-  valor: number;
-}
-
-const radarData: RadarPoint[] = [];
 
 export function StatsSection() {
   const activities = useActivityList();
@@ -1364,6 +1445,46 @@ export function StatsSection() {
     return items;
   }, [activities]);
 
+  /** Resumen anual: todo se deriva de las sesiones reales del año. */
+  const yearSummary = useMemo(() => {
+    const sessions = yearActivities.length;
+    const km = yearTotals.km;
+    const weeksElapsed = Math.max(
+      1,
+      Math.ceil(
+        (Date.now() - new Date(currentYear, 0, 1).getTime()) / (7 * 86400000),
+      ),
+    );
+    const hrRows = yearActivities.filter((a) => activityHr(a) > 0);
+    const paceRows = yearActivities.filter((a) => activityPaceSeconds(a) > 0);
+    const longest = yearActivities.reduce((acc, a) => Math.max(acc, activityKm(a)), 0);
+
+    return [
+      { label: "Media semanal", value: `${(km / weeksElapsed).toFixed(1)} km` },
+      {
+        label: "Distancia media por sesión",
+        value: sessions > 0 ? `${(km / sessions).toFixed(2)} km` : "0 km",
+      },
+      { label: "Sesión más larga", value: `${longest.toFixed(2)} km` },
+      {
+        label: "Ritmo medio",
+        value:
+          paceRows.length > 0
+            ? `${formatPace(
+                paceRows.reduce((acc, a) => acc + activityPaceSeconds(a), 0) / paceRows.length,
+              )} /km`
+            : "—",
+      },
+      {
+        label: "FC media",
+        value:
+          hrRows.length > 0
+            ? `${Math.round(hrRows.reduce((acc, a) => acc + activityHr(a), 0) / hrRows.length)} bpm`
+            : "—",
+      },
+    ];
+  }, [yearActivities, yearTotals, currentYear]);
+
   return (
     <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -1392,46 +1513,36 @@ export function StatsSection() {
           </div>
         </Panel>
 
-        <Panel title="Perfil de corredor" subtitle="índice 0-100">
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <RadarChart data={radarData} outerRadius="72%">
-                <PolarGrid stroke="var(--color-border)" />
-                <PolarAngleAxis dataKey="skill" tick={{ fill: "var(--color-muted-foreground)", fontSize: 11 }} />
-                <Radar dataKey="valor" stroke="var(--color-primary)" fill="var(--color-primary)" fillOpacity={0.25} />
-                <Tooltip contentStyle={tooltipStyle} />
-              </RadarChart>
-            </ResponsiveContainer>
-          </div>
+        <Panel title="Resumen del año" subtitle="calculado con tus sesiones">
+          {yearActivities.length === 0 ? (
+            <p className="rounded-2xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
+              Sin sesiones registradas este año.
+            </p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {yearSummary.map((r) => (
+                <li key={r.label} className="flex items-center justify-between py-3 text-sm">
+                  <span className="text-muted-foreground">{r.label}</span>
+                  <span className="font-display font-semibold">{r.value}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </Panel>
       </div>
 
       <Panel title="Momentos destacados" subtitle={`temporada ${currentYear}`}>
+        {highlights.length === 0 && (
+          <p className="rounded-2xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
+            Todavía no hay sesiones suficientes para destacar nada.
+          </p>
+        )}
         <div className="grid gap-3 md:grid-cols-3">
           {highlights.map((h) => (
             <div key={h.title} className="rounded-2xl border border-border p-4">
               <h.icon className="size-4 text-primary" />
               <p className="mt-3 text-sm font-medium">{h.title}</p>
               <p className="mt-1 text-xs text-muted-foreground">{h.value}</p>
-            </div>
-          ))}
-        </div>
-      </Panel>
-
-      <Panel
-        title="Comparativa con corredores de tu nivel"
-        subtitle="percentiles PACE"
-      >
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {[
-            { k: "Volumen semanal", v: "Top 12 %" },
-            { k: "Consistencia", v: "Top 8 %" },
-            { k: "Eficiencia", v: "Top 21 %" },
-            { k: "Progresión anual", v: "Top 15 %" },
-          ].map((c) => (
-            <div key={c.k} className="rounded-2xl border border-border p-4">
-              <p className="text-xs text-muted-foreground">{c.k}</p>
-              <p className="mt-2 font-display text-xl font-semibold text-primary">{c.v}</p>
             </div>
           ))}
         </div>

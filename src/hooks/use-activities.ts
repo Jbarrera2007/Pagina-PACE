@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { effortLabel } from "@/lib/effort";
 
 export function useActivities() {
   const [activities, setActivities] = useState<any[]>([]);
@@ -49,7 +50,7 @@ export function useActivities() {
         hr: a.avg_hr ?? 0,
         elevation: a.elevation_gain_m ?? 0,
         movingTime: a.moving_time_s ?? 0,
-        effort: a.effort ?? "Moderado",
+        effort: effortLabel(a.suffer_score),
         raw: a,
       };
     })

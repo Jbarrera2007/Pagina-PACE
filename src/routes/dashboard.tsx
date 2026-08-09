@@ -15,6 +15,7 @@ import {
   StatsSection,
   TrainingsSection,
 } from "@/components/dashboard/sections";
+import { DashboardDataProvider } from "@/hooks/use-dashboard-data";
 import {
   CoachPanel,
   GoalsPanel,
@@ -58,7 +59,7 @@ function Dashboard() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!loading && !user) void navigate({ to: "/auth", replace: true });
+    if (!loading && !user) void navigate({ to: "/auth", search: { next: "/dashboard" }, replace: true });
   }, [user, loading, navigate]);
 
   useEffect(() => {
@@ -136,6 +137,7 @@ function Dashboard() {
         return <SettingsSection />;
       default:
         return (
+          <DashboardDataProvider>
           <div className="space-y-3">
             <MetricGrid />
 
@@ -161,6 +163,7 @@ function Dashboard() {
               <GoalsPanel />
             </div>
           </div>
+          </DashboardDataProvider>
         );
 
     }

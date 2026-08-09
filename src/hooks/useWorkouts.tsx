@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { effortLabel } from "@/lib/effort";
 
 export interface Workout {
   id: string;
@@ -42,7 +43,7 @@ export function useWorkouts(userId:string){
           distance_m,
           avg_pace_s_per_km,
           avg_hr,
-          effort
+          suffer_score
         `)
         .eq("user_id",userId)
         .order("started_at",{ascending:false})
@@ -66,17 +67,17 @@ export function useWorkouts(userId:string){
 
 
         distance:
-          `${(w.distance_m/1000).toFixed(1)} km`,
+          `${((w.distance_m ?? 0)/1000).toFixed(1)} km`,
 
 
         pace:
-          formatPace(w.avg_pace_s_per_km)
+          formatPace(w.avg_pace_s_per_km ?? 0)
           +" /km",
 
 
         hr:w.avg_hr ?? 0,
 
-        effort:w.effort ?? "Moderado"
+        effort:effortLabel(w.suffer_score)
 
       }));
 
