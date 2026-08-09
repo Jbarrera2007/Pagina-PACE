@@ -1,18 +1,16 @@
-
 /**
  * Historial real de actividades del corredor.
  *
  * Fuente:
- *   Strava → Supabase → public.activities → PIE
+ * Strava → Supabase → public.activities → PIE
  *
  * IMPORTANTE:
  * - No genera actividades ficticias.
  * - No inventa FC, temperatura, humedad ni viento.
- * - Las métricas que requieren datos que no existen en Strava/Supabase
- *   deben tratarse como "sin datos".
+ * - Las métricas que requieren datos que no existen en
+ *   Strava/Supabase se consideran "sin datos".
  */
 
-import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 
 export type SessionKind =
@@ -38,17 +36,8 @@ export interface PieActivity {
 
   kind: SessionKind;
 
-  /**
-   * Actualmente activities guarda gear_id dentro de raw.
-   * Hasta tener una tabla de zapatillas/nombre de gear,
-   * usamos el gear_id real de Strava.
-   */
   shoe: string;
 
-  /**
-   * Estos datos NO están actualmente en activities.
-   * No los inventamos.
-   */
   tempC?: number;
   humidity?: number;
   windKmh?: number;
@@ -56,12 +45,19 @@ export interface PieActivity {
   hour: number;
 }
 
+/**
+ * Representación de la fila que necesitamos de Supabase.
+ *
+ * IMPORTANTE:
+ * No incluimos elevation_m porque esa columna
+ * no existe en la tabla activities.
+ */
 type ActivityRow = {
   id: string;
   user_id: string;
   source: string;
-  external_id: string;
-  name: string;
+  external_id: string | null;
+  name: string | null;
   sport_type: string | null;
 
   started_at: string;
@@ -79,54 +75,82 @@ type ActivityRow = {
   avg_cadence: number | null;
 
   elevation_gain_m: number | null;
-  elevation_m: number | null;
 
   effort: string | null;
 
-  raw: Record<string, unknown> | null;
+  raw: unknown;
 };
 
 /**
- * Cliente Supabase.
+ * Convierte raw de Supabase en un objeto seguro.
  *
- * IMPORTANTE:
- * Usa variables de entorno.
- * NO pongas la service_role key en código del navegador.
+ * Así podemos acceder a:
+ * raw["workout_type"]
+ * raw["gear_id"]
+ *
+ * sin errores de TypeScript.
  */
-function getSupabase() {
-  process.env["NEXT_PUBLIC_SUPABASE_URL"]
-  process.env["NEXT_PUBLIC_SUPABASE_ANON_KEY"]
-
-  if (!url || !anonKey) {
-    throw new Error(
-      "Faltan NEXT_PUBLIC_SUPABASE_URL o NEXT_PUBLIC_SUPABASE_ANON_KEY",
-    );
+function getRawObject(
+  raw: unknown,
+): Record<string, unknown> {
+  if (
+    typeof raw === "object" &&
+    raw !== null &&
+    !Array.isArray(raw)
+  ) {
+    return raw as Record<string, unknown>;
   }
 
-  return createClient(url, anonKey);
+  return {};
 }
 
 /**
- * Convierte el tipo de actividad de Strava a nuestro SessionKind.
+ * Convierte el tipo de actividad de Strava
+ * a nuestro SessionKind.
  *
- * Esto es una primera clasificación.
- * Más adelante podemos mejorarla utilizando laps/streams.
+ * Esta es una primera clasificación.
+ * Más adelante podemos mejorarla utilizando
+ * laps/streams.
  */
-function mapSessionKind(row: ActivityRow): SessionKind {
-  const name = (row.name ?? "").toLowerCase();
-  const sport = (row.sport_type ?? "").toLowerCase();
-  const effort = (row.effort ?? "").toLowerCase();
+function mapSessionKind(
+  row: ActivityRow,
+): SessionKind {
+  const name = (
+    row.name ?? ""
+  ).toLowerCase();
 
-  const raw = row.raw ?? {};
+  const sport = (
+    row.sport_type ?? ""
+  ).toLowerCase();
+
+  const effort = (
+    row.effort ?? ""
+  ).toLowerCase();
+
+  const raw = getRawObject(row.raw);
+
+  /**
+   * Strava suele guardar workout_type
+   * dentro de raw.
+   *
+   * Usamos acceso mediante [] porque raw
+   * tiene una firma de índice.
+   */
+  const workoutTypeValue =
+    raw["workout_type"];
 
   const workoutType =
-    typeof raw.workout_type === "number"
-      ? raw.workout_type
+    typeof workoutTypeValue === "number"
+      ? workoutTypeValue
       : null;
 
-  const distanceKm = (row.distance_m ?? 0) / 1000;
+  const distanceKm =
+    (row.distance_m ?? 0) / 1000;
 
-  // Strava workout_type = 1 suele corresponder a competición/race.
+  /**
+   * Strava workout_type = 1
+   * suele corresponder a competición/race.
+   */
   if (
     workoutType === 1 ||
     name.includes("race") ||
@@ -136,14 +160,20 @@ function mapSessionKind(row: ActivityRow): SessionKind {
     return "competicion";
   }
 
-  // Tirada larga.
+  /**
+   * Tirada larga.
+   */
   if (distanceKm >= 18) {
     return "larga";
   }
 
-  // Palabras habituales para sesiones de calidad.
+  /**
+   * Palabras habituales para sesiones
+   * de calidad.
+   */
   if (
     name.includes("series") ||
+    name.includes("serie") ||
     name.includes("interval") ||
     name.includes("intervals") ||
     name.includes("repeticiones") ||
@@ -157,17 +187,22 @@ function mapSessionKind(row: ActivityRow): SessionKind {
     return "series";
   }
 
+  /**
+   * Umbral / tempo / fartlek.
+   */
   if (
     name.includes("umbral") ||
     name.includes("threshold") ||
     name.includes("tempo") ||
-    name.includes("fartlek") ||
-    name.includes("threshold")
+    name.includes("fartlek")
   ) {
     return "umbral";
   }
 
-  // Todo lo demás que sea carrera se considera rodaje.
+  /**
+   * Todo lo demás que sea carrera
+   * se considera rodaje.
+   */
   if (
     sport === "run" ||
     sport === "running" ||
@@ -180,56 +215,122 @@ function mapSessionKind(row: ActivityRow): SessionKind {
 }
 
 /**
- * Strava suele devolver la cadencia de carrera como pasos de una pierna
- * (ej. 79.4), mientras PIE trabaja con pasos/minuto completos.
+ * Strava suele devolver la cadencia de carrera
+ * como pasos de una pierna (ej. 79.4),
+ * mientras PIE trabaja con pasos/minuto completos.
  *
- * Por eso 79.4 → ~159 spm.
+ * Por eso:
+ * 79.4 → ~159 spm.
  */
-function mapCadence(value: number | null): number | undefined {
-  if (value == null || !Number.isFinite(value)) {
+function mapCadence(
+  value: number | null,
+): number | undefined {
+  if (
+    value == null ||
+    !Number.isFinite(value)
+  ) {
     return undefined;
   }
 
-  const cadence = value < 120 ? value * 2 : value;
+  const cadence =
+    value < 120
+      ? value * 2
+      : value;
 
   return Math.round(cadence);
 }
 
 /**
- * Convierte una fila REAL de Supabase a PieActivity.
+ * Convierte una fila REAL de Supabase
+ * a PieActivity.
  */
-function mapActivity(row: ActivityRow): PieActivity | null {
-  const distanceM = row.distance_m ?? 0;
-  const movingTimeS = row.moving_time_s ?? 0;
+function mapActivity(
+  row: ActivityRow,
+): PieActivity | null {
+  const distanceM =
+    row.distance_m ?? 0;
 
-  if (distanceM <= 0 || movingTimeS <= 0) {
+  const movingTimeS =
+    row.moving_time_s ?? 0;
+
+  /**
+   * Una actividad sin distancia o tiempo
+   * no es válida para PIE.
+   */
+  if (
+    distanceM <= 0 ||
+    movingTimeS <= 0
+  ) {
     return null;
   }
 
-  const distanceKm = distanceM / 1000;
+  const distanceKm =
+    distanceM / 1000;
 
+  /**
+   * Si Supabase ya tiene el ritmo,
+   * usamos ese valor.
+   *
+   * Si no, lo calculamos a partir
+   * del tiempo y la distancia.
+   */
   const paceS =
     row.avg_pace_s_per_km != null &&
     row.avg_pace_s_per_km > 0
       ? row.avg_pace_s_per_km
       : movingTimeS / distanceKm;
 
-  const startedAt = new Date(row.started_at);
+  const startedAt =
+    new Date(row.started_at);
 
-  const raw = row.raw ?? {};
+  const raw =
+    getRawObject(row.raw);
 
   /**
-   * gear_id existe dentro del JSON de Strava.
+   * gear_id existe dentro del JSON
+   * de Strava.
    *
-   * Ejemplo real:
+   * Ejemplo:
    * "gear_id": "g13550696"
    */
+  const gearValue =
+    raw["gear_id"];
+
   const gearId =
-    typeof raw.gear_id === "string"
-      ? raw.gear_id
+    typeof gearValue === "string" &&
+    gearValue.trim().length > 0
+      ? gearValue
       : "sin-zapatillas";
 
-  return {
+  /**
+   * Elevación:
+   *
+   * Usamos únicamente elevation_gain_m
+   * porque elevation_m no existe en
+   * la tabla activities.
+   */
+  const elevationM =
+    Math.round(
+      row.elevation_gain_m ?? 0,
+    );
+
+  /**
+   * Hora local de España.
+   */
+  const hourString =
+    new Intl.DateTimeFormat(
+      "es-ES",
+      {
+        hour: "2-digit",
+        hour12: false,
+        timeZone: "Europe/Madrid",
+      },
+    ).format(startedAt);
+
+  const hour =
+    Number(hourString);
+
+    const activity: PieActivity = {
     id: row.external_id || row.id,
 
     date: row.started_at,
@@ -240,84 +341,85 @@ function mapActivity(row: ActivityRow): PieActivity | null {
 
     paceS: Math.round(paceS),
 
-    avgHr:
-      row.avg_hr != null && row.avg_hr > 0
-        ? row.avg_hr
-        : undefined,
-
-    maxHr:
-      row.max_hr != null && row.max_hr > 0
-        ? row.max_hr
-        : undefined,
-
-    cadence: mapCadence(row.avg_cadence),
-
-    elevationM: Math.round(
-      row.elevation_gain_m ??
-        row.elevation_m ??
-        0,
-    ),
+    elevationM,
 
     kind: mapSessionKind(row),
 
     shoe: gearId,
 
-    /**
-     * No inventamos estos datos.
-     *
-     * Si más adelante los guardas en Supabase,
-     * se pueden mapear aquí.
-     */
-    tempC: undefined,
-    humidity: undefined,
-    windKmh: undefined,
-
-    /**
-     * started_at está en UTC.
-     * Para España usamos la hora local de la actividad
-     * cuando el runtime tiene configurada la zona correspondiente.
-     */
-    hour: Number(
-      new Intl.DateTimeFormat("es-ES", {
-        hour: "2-digit",
-        hour12: false,
-        timeZone: "Europe/Madrid",
-      }).format(startedAt),
-    ),
+    hour: Number.isFinite(hour)
+      ? hour
+      : 0,
   };
+
+  // Solo añadimos estas propiedades
+  // si realmente existen en Strava/Supabase.
+  if (
+    row.avg_hr != null &&
+    row.avg_hr > 0
+  ) {
+    activity.avgHr = row.avg_hr;
+  }
+
+  if (
+    row.max_hr != null &&
+    row.max_hr > 0
+  ) {
+    activity.maxHr = row.max_hr;
+  }
+
+  const cadence = mapCadence(
+    row.avg_cadence,
+  );
+
+  if (cadence !== undefined) {
+    activity.cadence = cadence;
+  }
+
+  return activity;
 }
 
 /**
- * Carga las actividades REALES del usuario desde Supabase.
+ * Columnas que realmente existen
+ * y necesitamos de activities.
+ *
+ * IMPORTANTE:
+ * NO añadir elevation_m aquí.
+ */
+const ACTIVITY_SELECT = `
+  id,
+  user_id,
+  source,
+  external_id,
+  name,
+  sport_type,
+  started_at,
+  distance_m,
+  moving_time_s,
+  elapsed_time_s,
+  avg_pace_s_per_km,
+  avg_speed_ms,
+  avg_hr,
+  max_hr,
+  avg_cadence,
+  elevation_gain_m,
+  effort,
+  raw
+`;
+
+/**
+ * Carga todas las actividades REALES
+ * del usuario desde Supabase.
  */
 export async function getPieActivities(
   userId: string,
 ): Promise<PieActivity[]> {
-  const supabase = getSupabase();
-
-  const { data, error } = await supabase
+  const {
+    data,
+    error,
+  } = await supabase
     .from("activities")
-    .select(`
-      id,
-      user_id,
-      source,
-      external_id,
-      name,
-      sport_type,
-      started_at,
-      distance_m,
-      moving_time_s,
-      elapsed_time_s,
-      avg_pace_s_per_km,
-      avg_speed_ms,
-      avg_hr,
-      max_hr,
-      avg_cadence,
-      elevation_gain_m,
-      elevation_m,
-      effort,
-      raw
-    `)
+    .select(ACTIVITY_SELECT)
     .eq("user_id", userId)
     .eq("source", "strava")
     .order("started_at", {
@@ -335,53 +437,44 @@ export async function getPieActivities(
     );
   }
 
-  const rows = (data ?? []) as ActivityRow[];
+  const rows =
+    (data ?? []) as unknown as ActivityRow[];
 
   return rows
-    .map(mapActivity)
+    .map((row) =>
+      mapActivity(row),
+    )
     .filter(
-      (activity): activity is PieActivity =>
+      (
+        activity,
+      ): activity is PieActivity =>
         activity !== null,
     )
     .sort(
       (a, b) =>
-        new Date(a.date).getTime() -
-        new Date(b.date).getTime(),
+        new Date(
+          a.date,
+        ).getTime() -
+        new Date(
+          b.date,
+        ).getTime(),
     );
 }
 
 /**
- * Versión para cargar únicamente las últimas N actividades.
+ * Versión para cargar únicamente
+ * las últimas N actividades.
  */
 export async function getRecentPieActivities(
   userId: string,
   limit = 500,
 ): Promise<PieActivity[]> {
-  const supabase = getSupabase();
-
-  const { data, error } = await supabase
+  const {
+    data,
+    error,
+  } = await supabase
     .from("activities")
-    .select(`
-      id,
-      user_id,
-      source,
-      external_id,
-      name,
-      sport_type,
-      started_at,
-      distance_m,
-      moving_time_s,
-      elapsed_time_s,
-      avg_pace_s_per_km,
-      avg_speed_ms,
-      avg_hr,
-      max_hr,
-      avg_cadence,
-      elevation_gain_m,
-      elevation_m,
-      effort,
-      raw
-    `)
+    .select(ACTIVITY_SELECT)
     .eq("user_id", userId)
     .eq("source", "strava")
     .order("started_at", {
@@ -390,35 +483,62 @@ export async function getRecentPieActivities(
     .limit(limit);
 
   if (error) {
+    console.error(
+      "Error cargando actividades recientes:",
+      error,
+    );
+
     throw new Error(
       `No se pudieron cargar las actividades: ${error.message}`,
     );
   }
 
-  return (data ?? [])
-    .map((row) => mapActivity(row as ActivityRow))
+  const rows =
+    (data ?? []) as unknown as ActivityRow[];
+
+  return rows
+    .map((row) =>
+      mapActivity(row),
+    )
     .filter(
-      (activity): activity is PieActivity =>
+      (
+        activity,
+      ): activity is PieActivity =>
         activity !== null,
     )
     .sort(
       (a, b) =>
-        new Date(a.date).getTime() -
-        new Date(b.date).getTime(),
+        new Date(
+          a.date,
+        ).getTime() -
+        new Date(
+          b.date,
+        ).getTime(),
     );
 }
 
 /**
  * Fecha actual para PIE.
  *
- * Ya no usamos:
- *
- * new Date("2026-08-02T09:00:00Z")
- *
- * porque PIE debe analizar los datos reales actuales.
+ * Ya no usamos una fecha ficticia.
  */
-export const PIE_TODAY = new Date();
+export const PIE_TODAY =
+  new Date();
 
-export const pieActivities = [
-  // tus actividades aquí
-];
+/**
+ * Compatibilidad con código antiguo
+ * que todavía pueda importar pieActivities.
+ *
+ * IMPORTANTE:
+ * Esta lista está vacía intencionadamente.
+ *
+ * Las actividades reales se cargan mediante:
+ *
+ * getPieActivities(userId)
+ *
+ * o:
+ *
+ * getRecentPieActivities(userId)
+ */
+export const pieActivities: PieActivity[] =
+  [];

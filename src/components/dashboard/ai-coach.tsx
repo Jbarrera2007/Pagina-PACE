@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Bot, Plus, Send, Sparkles, Square, User2 } from "lucide-react";
+import {
+  Bot,
+  Plus,
+  Send,
+  Sparkles,
+  Square,
+  User2,
+} from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
@@ -23,31 +30,71 @@ const SUGGESTIONS = [
   "Cómo mejorar mi cadencia sin perder ritmo",
 ];
 
-/** Renderizado ligero de markdown: negritas, listas y saltos de línea. */
+/**
+ * Renderizado ligero de markdown:
+ * - Negritas
+ * - Listas
+ * - Saltos de línea
+ */
 function RichText({ text }: { text: string }) {
   return (
     <div className="space-y-1.5 text-sm leading-relaxed">
       {text.split("\n").map((line, i) => {
         const bullet = /^\s*[-*]\s+/.test(line);
-        const clean = bullet ? line.replace(/^\s*[-*]\s+/, "") : line;
-        const parts = clean.split(/(\*\*[^*]+\*\*)/g);
-        const rendered = parts.map((p, j) =>
-          p.startsWith("**") && p.endsWith("**") ? (
-            <strong key={j} className="font-semibold text-foreground">
-              {p.slice(2, -2)}
-            </strong>
-          ) : (
-            <span key={j}>{p}</span>
-          ),
+
+        const clean = bullet
+          ? line.replace(/^\s*[-*]\s+/, "")
+          : line;
+
+        const parts = clean.split(
+          /(\*\*[^*]+\*\*)/g,
         );
-        if (!clean.trim()) return <div key={i} className="h-1" />;
-        return bullet ? (
-          <div key={i} className="flex gap-2">
-            <span className="mt-[7px] size-1 shrink-0 rounded-full bg-primary" />
-            <p>{rendered}</p>
+
+        const rendered = parts.map((part, j) => {
+          if (
+            part.startsWith("**") &&
+            part.endsWith("**")
+          ) {
+            return (
+              <strong key={j}>
+                {part.slice(2, -2)}
+              </strong>
+            );
+          }
+
+          return (
+            <span key={j}>
+              {part}
+            </span>
+          );
+        });
+
+        if (!clean.trim()) {
+          return (
+            <div
+              key={i}
+              className="h-1"
+            />
+          );
+        }
+
+        if (bullet) {
+          return (
+            <div
+              key={i}
+              className="flex gap-2"
+            >
+              <span className="mt-2 size-1.5 shrink-0 rounded-full bg-current" />
+
+              <div>{rendered}</div>
+            </div>
+          );
+        }
+
+        return (
+          <div key={i}>
+            {rendered}
           </div>
-        ) : (
-          <p key={i}>{rendered}</p>
         );
       })}
     </div>
@@ -56,313 +103,849 @@ function RichText({ text }: { text: string }) {
 
 export function AiCoach() {
   const { user, session } = useAuth();
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Msg[]>([]);
-  const [input, setInput] = useState("");
-  const [streaming, setStreaming] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+
+  const [
+    conversations,
+    setConversations,
+  ] = useState<Conversation[]>([]);
+
+  const [
+    activeId,
+    setActiveId,
+  ] = useState<string | null>(null);
+
+  const [
+    messages,
+    setMessages,
+  ] = useState<Msg[]>([]);
+
+  const [
+    input,
+    setInput,
+  ] = useState("");
+
+  const [
+    streaming,
+    setStreaming,
+  ] = useState(false);
+
+  const abortRef =
+    useRef<AbortController | null>(null);
+
+  const bottomRef =
+    useRef<HTMLDivElement | null>(null);
+
+  // -----------------------------------------
+  // CARGAR CONVERSACIONES
+  // -----------------------------------------
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setConversations([]);
+      setActiveId(null);
+      setMessages([]);
+      return;
+    }
+
     void supabase
       .from("chat_conversations")
       .select("id, title")
-      .order("updated_at", { ascending: false })
-      .then(({ data }) => {
-        setConversations(data ?? []);
-        if (data && data.length > 0 && !activeId) setActiveId(data[0]!.id);
+      .order("updated_at", {
+        ascending: false,
+      })
+      .then(({ data, error }) => {
+        if (error) {
+          console.error(
+            "Error cargando conversaciones:",
+            error,
+          );
+
+          toast.error(
+            "No se pudieron cargar las conversaciones.",
+          );
+
+          return;
+        }
+
+        const rows: Conversation[] =
+          (data ?? []).map(
+            (conversation) => ({
+              id: conversation.id,
+              title:
+                conversation.title ||
+                "Nueva conversación",
+            }),
+          );
+
+        setConversations(rows);
+
+        if (
+          rows.length > 0 &&
+          !activeId
+        ) {
+          setActiveId(rows[0]!.id);
+        }
       });
+
+    // No queremos volver a cargar
+    // todas las conversaciones cuando cambia activeId.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
+  // -----------------------------------------
+  // CARGAR MENSAJES
+  // -----------------------------------------
+
   useEffect(() => {
-    if (!activeId) return;
+    if (!activeId) {
+      setMessages([]);
+      return;
+    }
+
     void supabase
       .from("chat_messages")
-      .select("id, role, content")
-      .eq("conversation_id", activeId)
-      .order("created_at", { ascending: true })
-      .then(({ data }) => {
+      .select(
+        "id, role, content",
+      )
+      .eq(
+        "conversation_id",
+        activeId,
+      )
+      .order("created_at", {
+        ascending: true,
+      })
+      .then(({ data, error }) => {
+        if (error) {
+          console.error(
+            "Error cargando mensajes:",
+            error,
+          );
+
+          toast.error(
+            "No se pudieron cargar los mensajes.",
+          );
+
+          return;
+        }
+
+        const loadedMessages: Msg[] =
+          (data ?? []).map(
+            (message) => ({
+              id: message.id,
+              role:
+                message.role ===
+                "assistant"
+                  ? "assistant"
+                  : "user",
+              content:
+                message.content ?? "",
+            }),
+          );
+
         setMessages(
-          (data ?? []).map((m) => ({
-            id: m.id,
-            role: m.role === "assistant" ? "assistant" : "user",
-            content: m.content,
-          })),
+          loadedMessages,
         );
       });
   }, [activeId]);
 
+  // -----------------------------------------
+  // SCROLL AUTOMÁTICO
+  // -----------------------------------------
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    bottomRef.current?.scrollIntoView(
+      {
+        behavior: "smooth",
+      },
+    );
   }, [messages, streaming]);
 
-  async function ensureConversation(firstMessage: string) {
-    if (activeId) return activeId;
-    const { data, error } = await supabase
+  // -----------------------------------------
+  // CREAR CONVERSACIÓN
+  // -----------------------------------------
+
+  async function ensureConversation(
+    firstMessage: string,
+  ): Promise<string> {
+    if (activeId) {
+      return activeId;
+    }
+
+    if (!user) {
+      throw new Error(
+        "Debes iniciar sesión para crear una conversación.",
+      );
+    }
+
+    const {
+      data,
+      error,
+    } = await supabase
       .from("chat_conversations")
-      .insert({ user_id: user!.id, title: firstMessage.slice(0, 48) })
+      .insert({
+        user_id: user.id,
+        title:
+          firstMessage.slice(0, 48),
+      })
       .select("id, title")
       .single();
-    if (error || !data) throw error ?? new Error("No se pudo crear la conversación");
-    setConversations((c) => [data, ...c]);
+
+    if (error || !data) {
+      throw (
+        error ??
+        new Error(
+          "No se pudo crear la conversación.",
+        )
+      );
+    }
+
+    const conversation: Conversation =
+      {
+        id: data.id,
+        title:
+          data.title ||
+          "Nueva conversación",
+      };
+
+    setConversations(
+      (current) => [
+        conversation,
+        ...current,
+      ],
+    );
+
     setActiveId(data.id);
+
     return data.id;
   }
 
-  async function send(text: string) {
-    const content = text.trim();
-    if (!content || streaming) return;
-    if (!user || !session) {
-      toast.error("Inicia sesión para hablar con tu IA Coach");
+  // -----------------------------------------
+  // ENVIAR MENSAJE
+  // -----------------------------------------
+
+  async function send(
+    text: string,
+  ) {
+    const content =
+      text.trim();
+
+    if (
+      !content ||
+      streaming
+    ) {
+      return;
+    }
+
+    if (
+      !user ||
+      !session
+    ) {
+      toast.error(
+        "Inicia sesión para hablar con tu IA Coach",
+      );
+
       return;
     }
 
     setInput("");
-    const history = [...messages, { id: crypto.randomUUID(), role: "user" as const, content }];
+
+    const userMessage: Msg =
+      {
+        id: crypto.randomUUID(),
+        role: "user",
+        content,
+      };
+
+    const history = [
+      ...messages,
+      userMessage,
+    ];
+
     setMessages(history);
     setStreaming(true);
 
-    const assistantId = crypto.randomUUID();
-    setMessages((m) => [...m, { id: assistantId, role: "assistant", content: "" }]);
+    const assistantId =
+      crypto.randomUUID();
 
-    const controller = new AbortController();
-    abortRef.current = controller;
+    setMessages(
+      (current) => [
+        ...current,
+        {
+          id: assistantId,
+          role: "assistant",
+          content: "",
+        },
+      ],
+    );
+
+    const controller =
+      new AbortController();
+
+    abortRef.current =
+      controller;
 
     try {
-      const conversationId = await ensureConversation(content);
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          conversationId,
-          messages: history.map((m) => ({ role: m.role, content: m.content })),
-        }),
-      });
+      // -------------------------------------
+      // CONVERSACIÓN
+      // -------------------------------------
 
-      if (res.status === 429) throw new Error("Demasiadas peticiones. Prueba en unos segundos.");
-      if (res.status === 402) throw new Error("Se han agotado los créditos de IA del espacio.");
-      if (!res.ok || !res.body) {
-  const detail = await res.text();
+      const conversationId =
+        await ensureConversation(
+          content,
+        );
 
-  let message = `Error ${res.status}`;
+      // -------------------------------------
+      // API
+      // -------------------------------------
 
-  try {
-    const parsed = JSON.parse(detail);
-    message =
-      parsed?.error?.message ||
-      parsed?.message ||
-      parsed?.error ||
-      detail ||
-      message;
-  } catch {
-    if (detail) message = detail;
-  }
+      const response =
+        await fetch(
+          "/api/chat",
+          {
+            method: "POST",
+            signal:
+              controller.signal,
+            headers: {
+              "Content-Type":
+                "application/json",
+              Authorization: `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify(
+              {
+                conversationId,
+                messages:
+                  history.map(
+                    (message) => ({
+                      role:
+                        message.role,
+                      content:
+                        message.content,
+                    }),
+                  ),
+              },
+            ),
+          },
+        );
 
-  console.error("PACE IA /api/chat:", {
-    status: res.status,
-    detail,
-  });
+      // -------------------------------------
+      // ERRORES HTTP
+      // -------------------------------------
 
-  throw new Error(message);
-}
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
+      if (
+        response.status ===
+        401
+      ) {
+        throw new Error(
+          "Sesión no autorizada. Vuelve a iniciar sesión.",
+        );
+      }
+
+      if (
+        response.status ===
+        429
+      ) {
+        throw new Error(
+          "Demasiadas peticiones. Prueba en unos segundos.",
+        );
+      }
+
+      if (
+        response.status ===
+        402
+      ) {
+        throw new Error(
+          "Se han agotado los créditos de IA del espacio.",
+        );
+      }
+
+      if (
+        !response.ok ||
+        !response.body
+      ) {
+        const detail =
+          await response.text();
+
+        let message =
+          `Error ${response.status}`;
+
+        try {
+          const parsed =
+            JSON.parse(
+              detail,
+            );
+
+          message =
+            parsed?.error
+              ?.message ||
+            parsed?.message ||
+            parsed?.error ||
+            detail ||
+            message;
+        } catch {
+          if (detail) {
+            message =
+              detail;
+          }
+        }
+
+        console.error(
+          "PACE IA /api/chat:",
+          {
+            status:
+              response.status,
+            detail,
+          },
+        );
+
+        throw new Error(
+          message,
+        );
+      }
+
+      // -------------------------------------
+      // STREAM
+      // -------------------------------------
+
+      const reader =
+        response.body.getReader();
+
+      const decoder =
+        new TextDecoder();
+
       while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        setMessages((m) =>
-          m.map((msg) => (msg.id === assistantId ? { ...msg, content: msg.content + chunk } : msg)),
+        const {
+          done,
+          value,
+        } =
+          await reader.read();
+
+        if (done) {
+          break;
+        }
+
+        const chunk =
+          decoder.decode(
+            value,
+            {
+              stream: true,
+            },
+          );
+
+        if (!chunk) {
+          continue;
+        }
+
+        setMessages(
+          (current) =>
+            current.map(
+              (message) =>
+                message.id ===
+                assistantId
+                  ? {
+                      ...message,
+                      content:
+                        message.content +
+                        chunk,
+                    }
+                  : message,
+            ),
+        );
+      }
+
+      // Decodificar cualquier contenido
+      // pendiente del TextDecoder.
+      const finalChunk =
+        decoder.decode();
+
+      if (finalChunk) {
+        setMessages(
+          (current) =>
+            current.map(
+              (message) =>
+                message.id ===
+                assistantId
+                  ? {
+                      ...message,
+                      content:
+                        message.content +
+                        finalChunk,
+                    }
+                  : message,
+            ),
         );
       }
     } catch (err) {
-  console.error("========== PACE IA ERROR ==========");
-  console.error("Error completo:", err);
-  console.error("Tipo:", typeof err);
-  console.error("Mensaje:", err instanceof Error ? err.message : String(err));
-  console.error("Stack:", err instanceof Error ? err.stack : "sin stack");
-  console.error("====================================");
+      console.error(
+        "========== PACE IA ERROR ==========",
+      );
 
-  if (err instanceof Error && err.name === "AbortError") return;
+      console.error(
+        "Error completo:",
+        err,
+      );
 
-  const message =
-    err instanceof Error
-      ? err.message
-      : typeof err === "string"
-        ? err
-        : JSON.stringify(err);
+      console.error(
+        "Tipo:",
+        typeof err,
+      );
 
-  toast.error(message || "Error desconocido");
+      console.error(
+        "Mensaje:",
+        err instanceof Error
+          ? err.message
+          : String(err),
+      );
 
-  setMessages((m) =>
-    m.filter(
-      (msg) => msg.id !== assistantId || msg.content.length > 0,
-    ),
-  );
-} finally {
+      console.error(
+        "Stack:",
+        err instanceof Error
+          ? err.stack
+          : "sin stack",
+      );
+
+      console.error(
+        "====================================",
+      );
+
+      if (
+        err instanceof Error &&
+        err.name ===
+          "AbortError"
+      ) {
+        return;
+      }
+
+      const message =
+        err instanceof Error
+          ? err.message
+          : typeof err ===
+              "string"
+            ? err
+            : "Error desconocido";
+
+      toast.error(
+        message ||
+          "Error desconocido",
+      );
+
+      setMessages(
+        (current) =>
+          current.filter(
+            (msg) =>
+              msg.id !==
+                assistantId ||
+              msg.content
+                .length > 0,
+          ),
+      );
+    } finally {
       setStreaming(false);
-      abortRef.current = null;
+      abortRef.current =
+        null;
     }
   }
 
+  // -----------------------------------------
+  // NUEVA CONVERSACIÓN
+  // -----------------------------------------
+
+  function handleNewConversation() {
+    if (streaming) {
+      abortRef.current?.abort();
+    }
+
+    setActiveId(null);
+    setMessages([]);
+    setInput("");
+  }
+
+  // -----------------------------------------
+  // RENDER
+  // -----------------------------------------
+
   return (
-    <div className="grid gap-3 xl:grid-cols-[260px_1fr]">
-      {/* Historial */}
-      <aside className="hidden rounded-3xl border border-border bg-surface/60 p-3 backdrop-blur-xl xl:block">
+    <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+      {/* -------------------------------------
+          HISTORIAL
+      ------------------------------------- */}
+
+      <aside className="rounded-3xl border border-border bg-surface/60 p-3 backdrop-blur-xl">
         <button
-          onClick={() => {
-            setActiveId(null);
-            setMessages([]);
-          }}
+          type="button"
+          onClick={
+            handleNewConversation
+          }
           className="flex w-full items-center gap-2 rounded-xl border border-border px-3 py-2.5 text-sm transition-colors hover:bg-secondary"
         >
-          <Plus className="size-4" /> Nueva conversación
+          <Plus className="size-4" />
+
+          Nueva conversación
         </button>
-        <p className="mt-4 px-2 text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-          Historial
-        </p>
-        <div className="mt-2 space-y-1">
-          {conversations.map((c) => (
-            <button
-              key={c.id}
-              onClick={() => setActiveId(c.id)}
-              className={`w-full truncate rounded-xl px-3 py-2 text-left text-sm transition-colors ${
-                c.id === activeId
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-muted-foreground hover:bg-secondary/60"
-              }`}
-            >
-              {c.title}
-            </button>
-          ))}
-          {conversations.length === 0 && (
-            <p className="px-3 py-2 text-xs text-muted-foreground">Todavía sin conversaciones.</p>
-          )}
+
+        <div className="mt-4">
+          <p className="px-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Historial
+          </p>
+
+          <div className="mt-2 space-y-1">
+            {conversations.map(
+              (conversation) => (
+                <button
+                  type="button"
+                  key={
+                    conversation.id
+                  }
+                  onClick={() =>
+                    setActiveId(
+                      conversation.id,
+                    )
+                  }
+                  className={`w-full truncate rounded-xl px-3 py-2 text-left text-sm transition-colors ${
+                    conversation.id ===
+                    activeId
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                      : "text-muted-foreground hover:bg-secondary/60"
+                  }`}
+                >
+                  {
+                    conversation.title
+                  }
+                </button>
+              ),
+            )}
+
+            {conversations.length ===
+              0 && (
+              <p className="px-3 py-3 text-xs text-muted-foreground">
+                Todavía sin
+                conversaciones.
+              </p>
+            )}
+          </div>
         </div>
       </aside>
 
-      {/* Chat */}
+      {/* -------------------------------------
+          CHAT
+      ------------------------------------- */}
+
       <section className="flex h-[calc(100svh-9rem)] min-h-[520px] flex-col rounded-3xl border border-border bg-surface/60 backdrop-blur-xl">
+        {/* HEADER */}
+
         <header className="flex items-center gap-3 border-b border-border px-5 py-4">
           <span className="grid size-9 place-items-center rounded-xl bg-primary/15 text-primary">
             <Sparkles className="size-4" />
           </span>
+
           <div>
-            <p className="text-sm font-semibold">IA Coach</p>
+            <p className="text-sm font-semibold">
+              IA Coach
+            </p>
+
             <p className="text-xs text-muted-foreground">
-              {streaming ? "Escribiendo…" : "Entrenador profesional · siempre disponible"}
+              {streaming
+                ? "Escribiendo…"
+                : "Entrenador profesional · siempre disponible"}
             </p>
           </div>
         </header>
 
+        {/* MENSAJES */}
+
         <div className="flex-1 space-y-4 overflow-y-auto px-5 py-6">
-          {messages.length === 0 && (
+          {/* ESTADO INICIAL */}
+
+          {messages.length ===
+            0 && (
             <div className="mx-auto max-w-lg text-center">
-              <span className="grid mx-auto size-12 place-items-center rounded-2xl bg-primary/10 text-primary">
+              <span className="mx-auto grid size-12 place-items-center rounded-2xl bg-primary/10 text-primary">
                 <Bot className="size-5" />
               </span>
+
               <h3 className="mt-4 text-lg font-semibold tracking-tight">
-                Hola, soy tu entrenador
+                Hola, soy tu
+                entrenador
               </h3>
+
               <p className="mt-1.5 text-sm text-muted-foreground">
-                Conozco tus entrenamientos, tu carga y tus objetivos. Pregúntame lo que quieras.
+                Conozco tus
+                entrenamientos,
+                tu carga y tus
+                objetivos.
+                Pregúntame lo que
+                quieras.
               </p>
+
               <div className="mt-6 grid gap-2 sm:grid-cols-2">
-                {SUGGESTIONS.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => void send(s)}
-                    className="rounded-xl border border-border bg-background/50 px-3 py-2.5 text-left text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
-                  >
-                    {s}
-                  </button>
-                ))}
+                {SUGGESTIONS.map(
+                  (suggestion) => (
+                    <button
+                      type="button"
+                      key={
+                        suggestion
+                      }
+                      onClick={() =>
+                        void send(
+                          suggestion,
+                        )
+                      }
+                      className="rounded-xl border border-border bg-background/50 px-3 py-2.5 text-left text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+                    >
+                      {
+                        suggestion
+                      }
+                    </button>
+                  ),
+                )}
               </div>
             </div>
           )}
 
+          {/* MENSAJES */}
+
           <AnimatePresence initial={false}>
-            {messages.map((m) => (
-              <motion.div
-                key={m.id}
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-                className={`flex gap-3 ${m.role === "user" ? "justify-end" : ""}`}
-              >
-                {m.role === "assistant" && (
-                  <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg bg-primary/15 text-primary">
-                    <Bot className="size-3.5" />
-                  </span>
-                )}
-                <div
-                  className={`max-w-[85%] rounded-2xl px-4 py-3 ${
-                    m.role === "user"
-                      ? "bg-primary text-primary-foreground"
-                      : "border border-border bg-background/50"
+            {messages.map(
+              (message) => (
+                <motion.div
+                  key={
+                    message.id
+                  }
+                  initial={{
+                    opacity: 0,
+                    y: 12,
+                  }}
+                  animate={{
+                    opacity: 1,
+                    y: 0,
+                  }}
+                  transition={{
+                    duration: 0.35,
+                    ease: [
+                      0.16,
+                      1,
+                      0.3,
+                      1,
+                    ],
+                  }}
+                  className={`flex gap-3 ${
+                    message.role ===
+                    "user"
+                      ? "justify-end"
+                      : ""
                   }`}
                 >
-                  {m.content ? (
-                    <RichText text={m.content} />
-                  ) : (
-                    <span className="flex gap-1 py-1">
-                      {[0, 1, 2].map((i) => (
-                        <motion.span
-                          key={i}
-                          animate={{ opacity: [0.2, 1, 0.2] }}
-                          transition={{ duration: 1.1, repeat: Infinity, delay: i * 0.15 }}
-                          className="size-1.5 rounded-full bg-muted-foreground"
-                        />
-                      ))}
+                  {message.role ===
+                    "assistant" && (
+                    <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg bg-primary/15 text-primary">
+                      <Bot className="size-3.5" />
                     </span>
                   )}
-                </div>
-                {m.role === "user" && (
-                  <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg bg-secondary">
-                    <User2 className="size-3.5" />
-                  </span>
-                )}
-              </motion.div>
-            ))}
+
+                  <div
+                    className={`max-w-[85%] rounded-2xl px-4 py-3 ${
+                      message.role ===
+                      "user"
+                        ? "bg-primary text-primary-foreground"
+                        : "border border-border bg-background/50"
+                    }`}
+                  >
+                    {message.content ? (
+                      <RichText
+                        text={
+                          message.content
+                        }
+                      />
+                    ) : (
+                      <span className="flex gap-1 py-1">
+                        {[0, 1, 2].map(
+                          (i) => (
+                            <motion.span
+                              key={i}
+                              animate={{
+                                opacity:
+                                  [
+                                    0.2,
+                                    1,
+                                    0.2,
+                                  ],
+                              }}
+                              transition={{
+                                duration:
+                                  1.1,
+                                repeat:
+                                  Infinity,
+                                delay:
+                                  i *
+                                  0.15,
+                              }}
+                              className="size-1.5 rounded-full bg-muted-foreground"
+                            />
+                          ),
+                        )}
+                      </span>
+                    )}
+                  </div>
+
+                  {message.role ===
+                    "user" && (
+                    <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg bg-secondary">
+                      <User2 className="size-3.5" />
+                    </span>
+                  )}
+                </motion.div>
+              ),
+            )}
           </AnimatePresence>
+
           <div ref={bottomRef} />
         </div>
 
+        {/* INPUT */}
+
         <form
-          onSubmit={(e) => {
-            e.preventDefault();
+          onSubmit={(event) => {
+            event.preventDefault();
             void send(input);
           }}
           className="flex items-center gap-2 border-t border-border p-3"
         >
           <input
             value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Pregunta a tu entrenador…"
-            className="flex-1 rounded-xl border border-border bg-background/60 px-4 py-3 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-primary"
+            onChange={(event) =>
+              setInput(
+                event.target.value,
+              )
+            }
+            disabled={!user || streaming}
+            placeholder={
+              user
+                ? "Pregunta a tu entrenador…"
+                : "Inicia sesión para hablar con tu entrenador"
+            }
+            className="flex-1 rounded-xl border border-border bg-background/60 px-4 py-3 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-primary disabled:cursor-not-allowed disabled:opacity-60"
           />
+
           {streaming ? (
             <button
               type="button"
-              onClick={() => abortRef.current?.abort()}
+              onClick={() =>
+                abortRef.current?.abort()
+              }
               className="grid size-11 place-items-center rounded-xl border border-border transition-colors hover:bg-secondary"
-              aria-label="Detener"
+              aria-label="Detener respuesta"
             >
               <Square className="size-4" />
             </button>
           ) : (
             <button
               type="submit"
-              disabled={!input.trim()}
-              className="grid size-11 place-items-center rounded-xl bg-primary text-primary-foreground transition-transform hover:scale-105 disabled:opacity-40"
-              aria-label="Enviar"
+              disabled={
+                !input.trim() ||
+                !user ||
+                !session
+              }
+              className="grid size-11 place-items-center rounded-xl bg-primary text-primary-foreground transition-transform hover:scale-105 disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label="Enviar mensaje"
             >
               <Send className="size-4" />
             </button>
