@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Bell, LogOut, Search } from "lucide-react";
 import { DashboardSidebar } from "@/components/dashboard/sidebar";
+import { MissionControl } from "@/components/dashboard/mission-control";
 import { AiCoach } from "@/components/dashboard/ai-coach";
 import { useAuth } from "@/hooks/use-auth";
 import { supabase } from "@/integrations/supabase/client";
@@ -124,11 +125,11 @@ const fullName = profileName ?? "";
   };
 
   function renderSection() {
-    switch (section) {
-      case "PACE IQ":
-        return ;
-      case "IA Coach":
-        return <AiCoach />;
+  switch (section) {
+    case "PACE IQ":
+      return <MissionControl name={displayName} />;
+    case "IA Coach":
+      return <AiCoach />;
       case "Entrenamientos":
         return <TrainingsSection />;
       case "Planes":
