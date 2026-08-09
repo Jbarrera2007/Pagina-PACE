@@ -175,7 +175,16 @@ function Dashboard() {
 
     }
   }
+const today = new Date();
 
+const dateLabel = new Intl.DateTimeFormat("es-ES", {
+  weekday: "long",
+  day: "numeric",
+  month: "long",
+}).format(today);
+
+const formattedDate =
+  dateLabel.charAt(0).toUpperCase() + dateLabel.slice(1);
   return (
     <div className="flex min-h-screen flex-col bg-background lg:flex-row">
       <DashboardSidebar active={section} onSelect={setSection} />
@@ -185,8 +194,8 @@ function Dashboard() {
           <div className="min-w-0">
             <p className="truncate text-xs text-muted-foreground">
               {section === "Dashboard"
-                ? "Domingo, 9 de agosto"
-                : (subtitles[section] ?? "Domingo, 9 de agosto")}
+  ? formattedDate
+  : (subtitles[section] ?? formattedDate)}
             </p>
             <h1 className="mt-1 truncate text-xl font-semibold tracking-tight sm:text-2xl">
               {section === "Dashboard" ? `Hola, ${displayName}` : section}
