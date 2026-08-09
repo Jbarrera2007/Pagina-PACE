@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
+import { useActivities } from "@/hooks/use-activities";
+import { useAuth } from "@/hooks/use-auth";
+import { supabase } from "@/integrations/supabase/client";
 import {
+  
   Area,
   AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
+  ComposedChart,
   Line,
   LineChart,
   PolarAngleAxis,
@@ -19,27 +24,32 @@ import {
   YAxis,
 } from "recharts";
 import {
-  Activity,
-  BatteryCharging,
-  Brain,
-  CalendarCheck,
-  CloudSun,
-  Dna,
+  Bell,
+  Calculator,
+  CalendarRange,
+  Check,
   Flag,
-  Footprints,
-  Gauge,
+  Globe,
   HeartPulse,
-  Rocket,
-  Scale,
-  ShieldAlert,
-  Sparkles,
+  Lock,
+  Moon,
+  Mountain,
+  Ruler,
   Target,
-  TrendingUp,
+  Timer,
   Trophy,
   Zap,
 } from "lucide-react";
-import { buildSnapshot, fmtPace, type PieSnapshot } from "@/lib/pie/engine";
-import { Locked, UpgradeBanner, usePlanTier } from "@/components/dashboard/plan";
+import { WeekComparison } from "@/components/dashboard/week-compare";
+import { StravaConnect } from "@/components/dashboard/strava-connect";
+import {
+  EditorUnlock,
+  Locked,
+  PlanComparison,
+  requestUpgrade,
+  usePlanTier,
+} from "@/components/dashboard/plan";
+
 
 const tooltipStyle = {
   background: "var(--color-popover)",
@@ -48,769 +58,1832 @@ const tooltipStyle = {
   fontSize: 12,
 };
 
-type NarrativeKey =
-  | "iq"
-  | "consistency"
-  | "velocity"
-  | "efficiency"
-  | "risk"
-  | "recovery"
-  | "readiness"
-  | "trend"
-  | "balance"
-  | "dna"
-  | "pbs"
-  | "predictions"
-  | "heat"
-  | "shoes"
-  | "goals"
-  | "daily";
+/* ------------------------- Modelo y utilidades de datos ------------------------- */
 
-/** Explicaciones deterministas: se muestran al instante y sirven de respaldo si la IA falla. */
-function fallbackNarrative(s: PieSnapshot): Record<NarrativeKey, string> {
-  return {
-    iq: `Tu nivel global es ${s.iq.score}/100 (${s.iq.level}). Ha variado ${s.iq.deltaWeek >= 0 ? "+" : ""}${s.iq.deltaWeek} puntos esta semana, empujado sobre todo por consistencia y coste cardíaco.`,
-    consistency: `Cumples el ${s.consistency.pct}% de lo planificado con ${s.consistency.streakWeeks} semanas encadenadas. Para subir, protege una sesión corta entre semana en lugar de recuperar kilómetros el fin de semana.`,
-    velocity: `Estás mejorando a ritmo "${s.velocity.label.toLowerCase()}": ${Math.abs(s.velocity.secPerKmPerMonth)} s/km por mes en rodajes. Es el efecto de acumular volumen sin subir la intensidad.`,
-    efficiency: `Corres a ${s.efficiency.now.pace} /km con ${s.efficiency.then.hr - s.efficiency.now.hr} ppm menos que hace 3 meses: tu eficiencia ha cambiado un ${s.efficiency.deltaPct > 0 ? "+" : ""}${s.efficiency.deltaPct}%.`,
-    risk: `Riesgo ${s.risk.level.toLowerCase()} con un ratio carga aguda/crónica de ${s.risk.acwr.toFixed(2)}. Es una tendencia de carga, no un diagnóstico: ajusta volumen antes de que se convierta en fatiga.`,
-    recovery: `${s.recovery.label} (${s.recovery.score}/100). ${s.recovery.detail}`,
-    readiness: `Llegas al ${s.readiness.pct}% de preparación para ${s.readiness.race}, a ${s.readiness.daysLeft} días. El factor que más suma ahora es tu base aeróbica.`,
-    trend: `Tendencia: ${s.trend.direction.toLowerCase()} (${s.trend.slope > 0 ? "+" : ""}${s.trend.slope}% de rendimiento ajustado por FC). ${s.trend.causes[0]}`,
-    balance: s.balance.note,
-    dna: `${s.dna.tagline} Tu distancia ideal hoy es ${s.dna.idealDistance.toLowerCase()} sobre ${s.dna.idealTerrain.toLowerCase()}.`,
-    pbs: `Tus marcas han mejorado de forma sostenida en las tres últimas temporadas; la mayor ganancia está en las distancias medias.`,
-    predictions: `Con tu estado actual, tu predicción en 10 K es ${s.predictions[1]?.time}. Para bajarla necesitas mover el umbral, no correr más kilómetros.`,
-    heat: `Rindes mejor entre ${s.heat.bestRange} y en la franja de ${s.heat.bestHour.toLowerCase()}. La humedad alta te cuesta ${Math.max(0, s.heat.humidityImpact)} s/km.`,
-    shoes: `Tienes ${s.shoes.length} modelos en rotación. Revisa las que superan el 80% de vida útil antes de meterles sesiones de calidad.`,
-    goals: `Tu objetivo más alcanzable ahora mismo es "${[...s.goals].sort((a, b) => b.probability - a.probability)[0]?.label}".`,
-    daily: s.dailyInsight,
-  };
-}
+type RawActivity = Record<string, unknown>;
 
-function usePieNarrative(snapshot: PieSnapshot) {
-  const fallback = useMemo(() => fallbackNarrative(snapshot), [snapshot]);
-  const [ai, setAi] = useState<Partial<Record<NarrativeKey, string>>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    const compact = {
-      iq: { score: snapshot.iq.score, level: snapshot.iq.level, deltaWeek: snapshot.iq.deltaWeek, deltaMonth: snapshot.iq.deltaMonth, deltaYear: snapshot.iq.deltaYear, components: snapshot.iq.components },
-      consistency: { pct: snapshot.consistency.pct, done: snapshot.consistency.done, planned: snapshot.consistency.planned, streak: snapshot.consistency.streakWeeks },
-      velocity: { label: snapshot.velocity.label, secPerKmPerMonth: snapshot.velocity.secPerKmPerMonth },
-      efficiency: { deltaPct: snapshot.efficiency.deltaPct, then: snapshot.efficiency.then, now: snapshot.efficiency.now, score: snapshot.efficiency.score },
-      risk: { level: snapshot.risk.level, acwr: snapshot.risk.acwr, monotony: snapshot.risk.monotony, reasons: snapshot.risk.reasons },
-      recovery: { score: snapshot.recovery.score, label: snapshot.recovery.label, detail: snapshot.recovery.detail },
-      readiness: { pct: snapshot.readiness.pct, race: snapshot.readiness.race, daysLeft: snapshot.readiness.daysLeft, drivers: snapshot.readiness.drivers },
-      trend: { direction: snapshot.trend.direction, slope: snapshot.trend.slope, causes: snapshot.trend.causes },
-      balance: { buckets: snapshot.balance.buckets, balanced: snapshot.balance.balanced },
-      dna: { archetype: snapshot.dna.archetype, radar: snapshot.dna.radar, idealDistance: snapshot.dna.idealDistance, idealTerrain: snapshot.dna.idealTerrain },
-      pbs: snapshot.pbs,
-      predictions: snapshot.predictions.map((p) => ({ label: p.label, time: p.time, confidence: p.confidence })),
-      heat: { bestRange: snapshot.heat.bestRange, bestHour: snapshot.heat.bestHour, humidityImpact: snapshot.heat.humidityImpact, windImpact: snapshot.heat.windImpact },
-      shoes: snapshot.shoes.map((s) => ({ name: s.name, km: s.km, lifePct: s.lifePct, pace: s.pace })),
-      goals: snapshot.goals.map((g) => ({ label: g.label, probability: g.probability })),
-    };
-
-    void fetch("/api/pie-insight", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(compact),
-    })
-      .then(async (r) => (r.ok ? ((await r.json()) as Partial<Record<NarrativeKey, string>>) : {}))
-      .catch(() => ({}))
-      .then((data) => {
-        if (!cancelled) {
-          setAi(data ?? {});
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [snapshot]);
-
-  const get = (key: NarrativeKey) => ai[key] ?? fallback[key];
-  return { get, loading, aiReady: Object.keys(ai).length > 0 };
-}
-
-/* ------------------------------- Primitivas -------------------------------- */
-
-function Card({
-  icon: Icon,
-  title,
-  question,
-  children,
-  note,
-  className,
-  delay = 0,
-  locked = false,
-  teaser,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
+interface Activity {
+  id: string;
   title: string;
-  question: string;
+  date: string;
+  distance: string;
+  distanceKm: number;
+  pace: string;
+  hr: number | string | null;
+  movingTime: number | string | null;
+  elevation: number | string | null;
+  effort: string | null;
+  raw?: RawActivity | null;
+}
+
+const MONTH_LABELS = [
+  "Ene",
+  "Feb",
+  "Mar",
+  "Abr",
+  "May",
+  "Jun",
+  "Jul",
+  "Ago",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dic",
+];
+
+/** Convierte cualquier valor a número seguro (0 si no es válido). */
+function toNumber(value: unknown): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value.replace(",", "."));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+/** Lee un campo de la fila original de Supabase. */
+function rawField(activity: Activity, key: string): unknown {
+  const raw = activity.raw;
+  if (raw && typeof raw === "object") return (raw as RawActivity)[key];
+  return undefined;
+}
+
+/** Duración en segundos (acepta segundos o "h:mm:ss" / "mm:ss"). */
+function toSeconds(value: unknown): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value === "string" && value.includes(":")) {
+    const parts = value.split(":").map((p) => Number(p));
+    if (parts.some((p) => !Number.isFinite(p))) return 0;
+    return parts.reduce((acc, p) => acc * 60 + p, 0);
+  }
+  return toNumber(value);
+}
+
+function activityDate(activity: Activity): Date | null {
+  const started = rawField(activity, "started_at");
+  const candidates: unknown[] = [started, activity.date];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim() !== "") {
+      const d = new Date(candidate);
+      if (!Number.isNaN(d.getTime())) return d;
+    }
+  }
+  return null;
+}
+
+function activityKm(activity: Activity): number {
+  const direct = toNumber(activity.distanceKm);
+  if (direct > 0) return direct;
+  return toNumber(rawField(activity, "distance_m")) / 1000;
+}
+
+function activityElevation(activity: Activity): number {
+  const direct = toNumber(activity.elevation);
+  if (direct > 0) return direct;
+  const gain = toNumber(rawField(activity, "elevation_gain_m"));
+  if (gain > 0) return gain;
+  return toNumber(rawField(activity, "elevation_m"));
+}
+
+function activityMovingSeconds(activity: Activity): number {
+  const raw = toNumber(rawField(activity, "moving_time_s"));
+  if (raw > 0) return raw;
+  const elapsed = toNumber(rawField(activity, "elapsed_time_s"));
+  if (elapsed > 0) return elapsed;
+  return toSeconds(activity.movingTime);
+}
+
+function activityPaceSeconds(activity: Activity): number {
+  const raw = toNumber(rawField(activity, "avg_pace_s_per_km"));
+  if (raw > 0) return raw;
+  const km = activityKm(activity);
+  const seconds = activityMovingSeconds(activity);
+  return km > 0 && seconds > 0 ? seconds / km : 0;
+}
+
+function activityHr(activity: Activity): number {
+  const direct = toNumber(activity.hr);
+  if (direct > 0) return direct;
+  return toNumber(rawField(activity, "avg_hr"));
+}
+
+function activitySpeedKmh(activity: Activity): number {
+  const raw = toNumber(rawField(activity, "avg_speed_ms"));
+  if (raw > 0) return raw * 3.6;
+  const km = activityKm(activity);
+  const seconds = activityMovingSeconds(activity);
+  return km > 0 && seconds > 0 ? (km / seconds) * 3600 : 0;
+}
+
+function activitySurface(activity: Activity): string {
+  const candidates = ["surface", "terrain", "sport_type"];
+  for (const key of candidates) {
+    const value = rawField(activity, key);
+    if (typeof value === "string" && value.trim() !== "") {
+      const clean = value.trim();
+      return clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
+    }
+  }
+  return "Carrera";
+}
+
+function normalize(value: unknown): string {
+  return typeof value === "string"
+    ? value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase()
+    : "";
+}
+
+function formatHours(seconds: number): string {
+  return (seconds / 3600).toFixed(1);
+}
+
+function formatDuration(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+    : `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function formatPace(secondsPerKm: number): string {
+  if (secondsPerKm <= 0) return "—";
+  const m = Math.floor(secondsPerKm / 60);
+  const s = Math.round(secondsPerKm % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function formatShortDate(date: Date | null, fallback: string): string {
+  if (!date) return fallback;
+  return date.toLocaleDateString("es-ES", { day: "numeric", month: "short", year: "numeric" });
+}
+
+/** Normaliza la lista devuelta por el hook a un tipo estable. */
+function useActivityList(): Activity[] {
+  const { activities } = useActivities();
+  return useMemo(() => (activities ?? []) as unknown as Activity[], [activities]);
+}
+
+interface Totals {
+  sessions: number;
+  km: number;
+  elevation: number;
+  seconds: number;
+}
+
+function computeTotals(list: Activity[]): Totals {
+  return list.reduce<Totals>(
+    (acc, a) => {
+      acc.sessions += 1;
+      acc.km += activityKm(a);
+      acc.elevation += activityElevation(a);
+      acc.seconds += activityMovingSeconds(a);
+      return acc;
+    },
+    { sessions: 0, km: 0, elevation: 0, seconds: 0 },
+  );
+}
+
+function Panel({
+  title,
+  subtitle,
+  children,
+  className,
+}: {
+  title: string;
+  subtitle?: string;
   children: React.ReactNode;
-  note?: string;
   className?: string;
-  delay?: number;
-  locked?: boolean;
-  teaser?: string;
 }) {
   return (
     <motion.section
-      initial={{ opacity: 0, y: 18 }}
+      initial={{ opacity: 0, y: 14 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.55, delay, ease: [0.16, 1, 0.3, 1] }}
-      className={`surface-panel flex flex-col p-5 ${className ?? ""}`}
+      transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+      className={`surface-panel p-5 ${className ?? ""}`}
     >
-      <header className="flex items-start gap-3">
-        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/12 text-primary">
-          <Icon className="size-4" />
-        </span>
-        <div className="min-w-0">
-          <h2 className="flex flex-wrap items-center gap-2 text-sm font-semibold tracking-tight">
-            {title}
-            {locked && (
-              <span className="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-primary">
-                Pro
-              </span>
-            )}
-          </h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">{question}</p>
-        </div>
+      <header className="flex items-baseline justify-between">
+        <h2 className="text-sm font-medium">{title}</h2>
+        {subtitle && <span className="text-xs text-muted-foreground">{subtitle}</span>}
       </header>
-      <div className="mt-5 flex-1">
-        <Locked locked={locked} teaser={teaser}>
+      <div className="mt-4">{children}</div>
+    </motion.section>
+  );
+}
+
+function Stat({ label, value, unit }: { label: string; value: string; unit?: string }) {
+  return (
+    <div className="surface-panel p-4">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <div className="mt-2 flex items-end gap-1">
+        <span className="font-display text-2xl font-semibold">{value}</span>
+        {unit && <span className="pb-0.5 text-xs text-muted-foreground">{unit}</span>}
+      </div>
+    </div>
+  );
+}
+
+/** Panel con contenido exclusivo de PRO/ELITE: se difumina en el plan Free. */
+function PremiumPanel({
+  title,
+  subtitle,
+  teaser,
+  children,
+  className,
+  label = "PRO",
+}: {
+  title: string;
+  subtitle?: string;
+  teaser: string;
+  children: React.ReactNode;
+  className?: string;
+  label?: "PRO" | "ELITE";
+}) {
+  const { tier } = usePlanTier();
+  const locked = label === "ELITE" ? tier !== "elite" : tier === "free";
+
+  return (
+    <motion.section
+      initial={{ opacity: 0, y: 14 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+      className={`surface-panel p-5 ${className ?? ""}`}
+    >
+      <header className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="flex items-center gap-2 text-sm font-medium">
+          {title}
+        </h2>
+        {subtitle && <span className="text-xs text-muted-foreground">{subtitle}</span>}
+      </header>
+      <div className="mt-4">
+        <Locked locked={locked} label={label} teaser={teaser}>
           {children}
         </Locked>
       </div>
-      {note && (
-        <Locked locked={locked} teaser="La lectura del entrenador IA está incluida en PRO.">
-          <p className="mt-5 flex gap-2 rounded-2xl border border-border/70 bg-background/40 p-3 text-xs leading-relaxed text-muted-foreground">
-            <Sparkles className="mt-0.5 size-3.5 shrink-0 text-primary" />
-            <span>{note}</span>
-          </p>
-        </Locked>
-      )}
     </motion.section>
   );
 }
 
 
-function Ring({ value, label, sub, size = 168 }: { value: number; label: string; sub?: string; size?: number }) {
-  const r = size / 2 - 12;
-  const c = 2 * Math.PI * r;
-  return (
-    <div className="flex flex-col items-center gap-2">
-      <div className="relative grid shrink-0 place-items-center" style={{ width: size, height: size }}>
-        <svg width={size} height={size} className="-rotate-90">
-          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--color-secondary)" strokeWidth={10} />
-          <motion.circle
-            cx={size / 2}
-            cy={size / 2}
-            r={r}
-            fill="none"
-            stroke="var(--color-primary)"
-            strokeWidth={10}
-            strokeLinecap="round"
-            strokeDasharray={c}
-            initial={{ strokeDashoffset: c }}
-            animate={{ strokeDashoffset: c - (c * Math.max(0, Math.min(100, value))) / 100 }}
-            transition={{ duration: 1.1, ease: [0.16, 1, 0.3, 1] }}
-          />
-        </svg>
-        <div className="absolute grid place-items-center px-4 text-center">
-          <p className="font-display text-3xl font-semibold leading-none">{label}</p>
-        </div>
-      </div>
-      {sub && <p className="max-w-[180px] text-center text-[11px] leading-tight text-muted-foreground">{sub}</p>}
-    </div>
+/* ------------------------------ Entrenamientos ----------------------------- */
+
+export function TrainingsSection() {
+  const activities = useActivityList();
+
+  const [effortOverrides, setEffortOverrides] = useState<Record<string, "Suave" | "Moderado" | "Duro">>(() => {
+    try {
+      const raw = window.localStorage.getItem("pace:activity-effort");
+      return raw ? (JSON.parse(raw) as Record<string, "Suave" | "Moderado" | "Duro">) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const setActivityEffort = (id: string, effort: "Suave" | "Moderado" | "Duro") => {
+    setEffortOverrides((prev) => {
+      const next = { ...prev, [id]: effort };
+      window.localStorage.setItem("pace:activity-effort", JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const [filter, setFilter] = useState<
+    "Todos" | "Suave" | "Moderado" | "Duro"
+  >("Todos");
+
+  const now = useMemo(() => new Date(), []);
+
+  /** Actividades del mes en curso. */
+  const monthActivities = useMemo(
+    () =>
+      activities.filter((a) => {
+        const d = activityDate(a);
+        return !!d && d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+      }),
+    [activities, now],
   );
 
-}
+  const monthTotals = useMemo(() => computeTotals(monthActivities), [monthActivities]);
 
-function Meter({ label, value, hint }: { label: string; value: number; hint?: string }) {
-  return (
-    <div>
-      <div className="flex items-baseline justify-between text-xs">
-        <span>{label}</span>
-        <span className="text-muted-foreground">{value}</span>
-      </div>
-      <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-secondary">
-        <motion.div
-          initial={{ width: 0 }}
-          animate={{ width: `${Math.max(0, Math.min(100, value))}%` }}
-          transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}
-          className="h-full rounded-full bg-primary"
-        />
-      </div>
-      {hint && <p className="mt-1 text-[10px] text-muted-foreground">{hint}</p>}
-    </div>
+  /** Volumen agrupado por mes (últimos 6 meses naturales). */
+  const monthlyVolume = useMemo(() => {
+    const buckets = new Map<string, number>();
+    for (const a of activities) {
+      const d = activityDate(a);
+      if (!d) continue;
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      buckets.set(key, (buckets.get(key) ?? 0) + activityKm(a));
+    }
+    return Array.from({ length: 6 }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      return {
+        mes: MONTH_LABELS[d.getMonth()] ?? "",
+        km: Number((buckets.get(key) ?? 0).toFixed(1)),
+      };
+    });
+  }, [activities, now]);
+
+  /** Reparto por superficie de los últimos 90 días (datos reales). */
+  const surfaceSplit = useMemo(() => {
+    const since = now.getTime() - 90 * 86_400_000;
+    const buckets = new Map<string, number>();
+    for (const a of activities) {
+      const d = activityDate(a);
+      if (!d || d.getTime() < since) continue;
+      const key = activitySurface(a);
+      buckets.set(key, (buckets.get(key) ?? 0) + activityKm(a));
+    }
+    if (buckets.size === 0) return [{ tipo: "Carrera", km: 0 }];
+    return Array.from(buckets, ([tipo, km]) => ({ tipo, km: Number(km.toFixed(1)) })).sort(
+      (a, b) => b.km - a.km,
+    );
+  }, [activities, now]);
+
+  /** Historial filtrado por esfuerzo real. */
+  const history = useMemo(
+    () =>
+      activities
+        .filter((a) => {
+          const effort = effortOverrides[a.id] ?? a.effort;
+          return filter === "Todos" || normalize(effort) === normalize(filter);
+        })
+        .map((a) => ({
+          id: a.id,
+          title: a.title,
+          date: a.date,
+          distance: a.distance || `${activityKm(a).toFixed(2)} km`,
+          pace: a.pace || `${formatPace(activityPaceSeconds(a))} /km`,
+          hr: activityHr(a),
+        })),
+    [activities, filter, effortOverrides],
   );
-}
-
-function Pill({ children, tone = "neutral" }: { children: React.ReactNode; tone?: "neutral" | "good" | "warn" | "bad" }) {
-  const cls = {
-    neutral: "border-border text-muted-foreground",
-    good: "border-primary/40 bg-primary/10 text-primary",
-    warn: "border-warning/40 bg-warning/10 text-warning",
-    bad: "border-destructive/40 bg-destructive/10 text-destructive",
-  }[tone];
-  return <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] ${cls}`}>{children}</span>;
-}
-
-/* --------------------------------- Panel ---------------------------------- */
-
-export function PieDashboard() {
-  const snapshot = useMemo(() => buildSnapshot(), []);
-  const { get, loading, aiReady } = usePieNarrative(snapshot);
-  const s = snapshot;
-
-  const { isFree } = usePlanTier();
-  const [iqRange, setIqRange] = useState<"weekly" | "monthly" | "yearly">("weekly");
-  const iqSeries = s.iq[iqRange];
-
-  const riskTone = s.risk.level === "Bajo" ? "good" : s.risk.level === "Moderado" ? "warn" : "bad";
-  const recTone = s.recovery.label === "Recuperado" ? "good" : s.recovery.label === "Parcialmente recuperado" ? "warn" : "bad";
 
   return (
     <div className="space-y-3">
-      {isFree && <UpgradeBanner hiddenCount={10} />}
-      {/* Daily insight */}
-      <motion.section
-        initial={{ opacity: 0, y: 14 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-        className="surface-panel relative overflow-hidden p-6"
-      >
-        <div className="pointer-events-none absolute -right-24 -top-24 size-64 rounded-full bg-primary/15 blur-3xl" />
-        <div className="relative flex flex-wrap items-center justify-between gap-4">
-          <div className="max-w-3xl">
-            <p className="flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-primary">
-              <Brain className="size-3.5" /> PACE Intelligence Engine
-            </p>
-            <h2 className="mt-3 font-display text-xl font-semibold tracking-tight md:text-2xl">
-              {get("daily")}
-            </h2>
-            <p className="mt-2 text-xs text-muted-foreground">
-              {loading
-                ? "Interpretando tus datos con IA…"
-                : aiReady
-                  ? "Lectura generada por IA a partir de tus últimos 3 años de entrenamientos."
-                  : "Lectura calculada con tu histórico de entrenamientos."}
-              {" · Se recalcula tras cada entrenamiento y una vez al día."}
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <Ring value={s.iq.score} label={`${s.iq.score}`} sub={`Runner IQ · ${s.iq.level}`} size={140} />
-          </div>
-        </div>
-      </motion.section>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Stat label="Sesiones del mes" value={String(monthTotals.sessions)} />
 
-      {/* Runner IQ */}
+<Stat 
+  label="Volumen del mes" 
+  value={monthTotals.km.toFixed(1)} 
+  unit="km" 
+/>
+
+<Stat 
+  label="Desnivel acumulado" 
+  value={Math.round(monthTotals.elevation).toLocaleString("es-ES")} 
+  unit="m"
+/>
+
+<Stat 
+  label="Tiempo en movimiento" 
+  value={formatHours(monthTotals.seconds)} 
+  unit="h"
+/>
+      </div>
+
+      <WeekComparison />
+
       <div className="grid gap-3 xl:grid-cols-3">
-        <Card
-          icon={Brain}
-          title="Runner IQ"
-          question="¿Cuál es mi nivel real como corredor hoy?"
-          note={get("iq")}
+        <Panel title="Volumen mensual" subtitle="6 meses" className="xl:col-span-2">
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={monthlyVolume}>
+                <defs>
+                  <linearGradient id="volGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--color-primary)" stopOpacity={0.5} />
+                    <stop offset="100%" stopColor="var(--color-primary)" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid stroke="var(--color-border)" vertical={false} />
+                <XAxis dataKey="mes" stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} />
+                <YAxis stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} width={34} />
+                <Tooltip contentStyle={tooltipStyle} />
+                <Area type="monotone" dataKey="km" stroke="var(--color-primary)" strokeWidth={2} fill="url(#volGrad)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </Panel>
+
+        <Panel title="Superficie" subtitle="últimos 90 días">
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={surfaceSplit} layout="vertical">
+                <XAxis type="number" hide />
+                <YAxis dataKey="tipo" type="category" stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} width={60} />
+                <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "var(--color-secondary)" }} />
+                <Bar dataKey="km" radius={[0, 8, 8, 0]} fill="var(--color-primary)" barSize={18} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Panel>
+      </div>
+
+      <Panel title="Historial de sesiones" subtitle={`${history.length} resultados`}>
+        <div className="mb-4 flex flex-wrap gap-2">
+          {(["Todos", "Suave", "Moderado", "Duro"] as const).map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`rounded-full border px-3 py-1.5 text-xs transition-colors ${
+                filter === f
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+        <div className="divide-y divide-border">
+          {history.map((w) => (
+            <div key={w.id} className="grid grid-cols-2 gap-2 py-3 text-sm md:grid-cols-5">
+              <div className="col-span-2 md:col-span-2">
+                <p className="font-medium">{w.title}</p>
+                <p className="text-xs text-muted-foreground">{w.date}</p>
+              </div>
+              <span className="text-muted-foreground">{w.distance}</span>
+              <span className="text-muted-foreground">{w.pace}</span>
+              <span className="text-muted-foreground">{w.hr > 0 ? `${w.hr} bpm` : "—"}</span>
+              <div className="col-span-2 flex flex-wrap gap-1 md:col-span-5">
+                {(["Suave", "Moderado", "Duro"] as const).map((effort) => {
+                  const active = normalize(effortOverrides[w.id] ?? activities.find((a) => a.id === w.id)?.effort) === normalize(effort);
+                  return (
+                    <button
+                      key={effort}
+                      type="button"
+                      onClick={() => setActivityEffort(w.id, effort)}
+                      className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors ${active ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
+                    >
+                      {effort}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+    </div>
+
+  );
+}
+
+/* ---------------------------------- Planes --------------------------------- */
+
+interface PlanRow {
+  id: string;
+  name: string;
+  weeks: number;
+  goal_race: string | null;
+  starts_on: string | null;
+  level: string | null;
+}
+
+interface PlanSessionRow {
+  id: string;
+  title: string;
+  description: string | null;
+  week_number: number;
+  scheduled_on: string | null;
+  completed: boolean;
+  target_distance_m: number | null;
+}
+
+export function PlansSection() {
+  const { user } = useAuth();
+  const [plan, setPlan] = useState<PlanRow | null>(null);
+  const [sessions, setSessions] = useState<PlanSessionRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user) {
+      setPlan(null);
+      setSessions([]);
+      setLoading(false);
+      return;
+    }
+    let alive = true;
+    void (async () => {
+      const { data: planRow } = await supabase
+        .from("training_plans")
+        .select("id,name,weeks,goal_race,starts_on,level")
+        .eq("user_id", user.id)
+        .eq("is_active", true)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!alive) return;
+      setPlan((planRow as PlanRow | null) ?? null);
+      if (planRow) {
+        const { data: rows } = await supabase
+          .from("plan_sessions")
+          .select("id,title,description,week_number,scheduled_on,completed,target_distance_m")
+          .eq("plan_id", planRow.id)
+          .order("week_number", { ascending: true });
+        if (!alive) return;
+        setSessions((rows as PlanSessionRow[] | null) ?? []);
+      } else {
+        setSessions([]);
+      }
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [user]);
+
+  /** Kilómetros planificados por semana, sumando los objetivos reales de cada sesión. */
+  const planWeeks = useMemo(() => {
+    if (!plan) return [] as { semana: string; km: number; hechas: number }[];
+    const map = new Map<number, { km: number; hechas: number }>();
+    for (const s of sessions) {
+      const cur = map.get(s.week_number) ?? { km: 0, hechas: 0 };
+      cur.km += (s.target_distance_m ?? 0) / 1000;
+      if (s.completed) cur.hechas += 1;
+      map.set(s.week_number, cur);
+    }
+    return Array.from(map.entries())
+      .sort((x, y) => x[0] - y[0])
+      .map(([week, v]) => ({
+        semana: `S${week}`,
+        km: Number(v.km.toFixed(1)),
+        hechas: v.hechas,
+      }));
+  }, [plan, sessions]);
+
+  /** Semana en curso según la fecha de inicio real del plan. */
+  const currentWeek = useMemo(() => {
+    if (!plan?.starts_on) return null;
+    const start = new Date(`${plan.starts_on}T00:00:00`).getTime();
+    if (Number.isNaN(start)) return null;
+    const diff = Math.floor((Date.now() - start) / (7 * 86_400_000)) + 1;
+    if (diff < 1) return null;
+    return Math.min(diff, plan.weeks);
+  }, [plan]);
+
+  const weekSessions = useMemo(
+    () => (currentWeek ? sessions.filter((s) => s.week_number === currentWeek) : []),
+    [sessions, currentWeek],
+  );
+
+  const completed = sessions.filter((s) => s.completed).length;
+
+  if (loading) {
+    return (
+      <div className="surface-panel p-5 text-xs text-muted-foreground">Cargando tu plan…</div>
+    );
+  }
+
+  if (!plan) {
+    return (
+      <div className="surface-panel p-8 text-center">
+        <CalendarRange className="mx-auto size-5 text-primary" />
+        <p className="mt-3 text-sm font-medium">Todavía no tienes un plan activo</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Cuando crees o generes un plan de entrenamiento aparecerá aquí con sus semanas y sesiones
+          reales.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-3 xl:grid-cols-3">
+        <Panel
+          title={plan.name}
+          subtitle={
+            currentWeek ? `Semana ${currentWeek} de ${plan.weeks}` : `${plan.weeks} semanas`
+          }
           className="xl:col-span-2"
         >
-          <div className="flex flex-wrap items-center gap-3">
-            {(["weekly", "monthly", "yearly"] as const).map((r) => (
-              <button
-                key={r}
-                onClick={() => setIqRange(r)}
-                className={`rounded-full border px-3 py-1.5 text-xs transition-colors ${
-                  iqRange === r ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {{ weekly: "Semanal", monthly: "Mensual", yearly: "Anual" }[r]}
-              </button>
-            ))}
-            <span className="ml-auto text-xs text-muted-foreground">
-              7 d {s.iq.deltaWeek >= 0 ? "+" : ""}
-              {s.iq.deltaWeek} · 30 d {s.iq.deltaMonth >= 0 ? "+" : ""}
-              {s.iq.deltaMonth} · 1 año {s.iq.deltaYear >= 0 ? "+" : ""}
-              {s.iq.deltaYear}
-            </span>
-          </div>
-          <div className="mt-4 h-56">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={iqSeries}>
-                <defs>
-                  <linearGradient id="iqGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--color-primary)" stopOpacity={0.45} />
-                    <stop offset="100%" stopColor="var(--color-primary)" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid stroke="var(--color-border)" vertical={false} />
-                <XAxis dataKey="label" stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} />
-                <YAxis domain={[(d: number) => Math.max(0, d - 6), (d: number) => Math.min(100, d + 4)]} stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} width={28} />
-                <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [`${v}/100`, "Runner IQ"]} />
-                <Area type="monotone" dataKey="iq" stroke="var(--color-primary)" strokeWidth={2.5} fill="url(#iqGrad)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-
-        <Card icon={Gauge} title="Factores del Runner IQ" question="¿Qué me está sumando y qué me está restando?" delay={0.05}>
-          <div className="space-y-3">
-            {s.iq.components.map((c) => (
-              <Meter key={c.key} label={`${c.label} · ${Math.round(c.weight * 100)}%`} value={c.value} hint={c.hint} />
-            ))}
-          </div>
-        </Card>
-      </div>
-
-      {/* Consistency / Velocity / Efficiency */}
-      <div className="grid gap-3 xl:grid-cols-3">
-        <Card icon={CalendarCheck} title="Consistency Index" question="¿Estoy siendo realmente constante?" note={get("consistency")}>
-          <div className="flex items-end gap-4">
-            <p className="font-display text-4xl font-semibold">{s.consistency.pct}%</p>
-            <div className="pb-1 text-xs text-muted-foreground">
-              <p>
-                {s.consistency.done} sesiones en 8 semanas (objetivo {s.consistency.planned})
-              </p>
-              <p className="mt-0.5">
-                Racha actual: {s.consistency.streakWeeks} semanas · Mejor: {s.consistency.bestStreak}
-              </p>
-            </div>
-          </div>
-          <div className="mt-4 h-32">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={s.consistency.weeks}>
-                <XAxis dataKey="label" stroke="var(--color-muted-foreground)" fontSize={10} tickLine={false} axisLine={false} />
-                <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "var(--color-secondary)" }} />
-                <Bar dataKey="sesiones" radius={[6, 6, 0, 0]} barSize={14}>
-                  {s.consistency.weeks.map((w) => (
-                    <Cell key={w.label} fill={w.sesiones >= 5 ? "var(--color-primary)" : "var(--color-secondary)"} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-
-        <Card icon={Rocket} title="Improvement Velocity" question="¿A qué velocidad estoy mejorando?" note={get("velocity")} delay={0.05}>
-          <div className="flex items-center gap-3">
-            <Pill tone={s.velocity.label === "Muy rápida" || s.velocity.label === "Rápida" ? "good" : s.velocity.label === "Normal" ? "neutral" : "warn"}>
-              {s.velocity.label}
-            </Pill>
-            <span className="text-xs text-muted-foreground">
-              {s.velocity.secPerKmPerMonth > 0 ? "−" : "+"}
-              {Math.abs(s.velocity.secPerKmPerMonth)} s/km al mes
-            </span>
-          </div>
-          <div className="mt-4 h-40">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={s.velocity.series}>
-                <CartesianGrid stroke="var(--color-border)" vertical={false} />
-                <XAxis dataKey="label" stroke="var(--color-muted-foreground)" fontSize={10} tickLine={false} axisLine={false} />
-                <YAxis reversed domain={["dataMin-8", "dataMax+8"]} tickFormatter={(v: number) => fmtPace(v)} stroke="var(--color-muted-foreground)" fontSize={10} tickLine={false} axisLine={false} width={40} />
-                <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [`${fmtPace(v)} /km`, "Ritmo rodaje"]} />
-                <Line type="monotone" dataKey="ritmo" stroke="var(--color-primary)" strokeWidth={2.5} dot={{ r: 3 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-
-        <Card icon={HeartPulse} title="Efficiency Score" locked={false} teaser="Compara tu coste cardíaco a igual ritmo mes a mes." question="¿Me cuesta menos correr al mismo ritmo?" note={get("efficiency")} delay={0.1}>
-          <div className="grid grid-cols-2 gap-2">
-            <div className="rounded-2xl border border-border p-3">
-              <p className="text-[11px] text-muted-foreground">Hace 3 meses</p>
-              <p className="mt-1 font-display text-lg font-semibold">{s.efficiency.then.pace} /km</p>
-              <p className="text-xs text-muted-foreground">{s.efficiency.then.hr} ppm</p>
-            </div>
-            <div className="rounded-2xl border border-primary/40 bg-primary/5 p-3">
-              <p className="text-[11px] text-muted-foreground">Ahora</p>
-              <p className="mt-1 font-display text-lg font-semibold">{s.efficiency.now.pace} /km</p>
-              <p className="text-xs text-primary">{s.efficiency.now.hr} ppm</p>
-            </div>
-          </div>
-          <div className="mt-4 h-28">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={s.efficiency.series}>
-                <defs>
-                  <linearGradient id="effGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--color-primary)" stopOpacity={0.4} />
-                    <stop offset="100%" stopColor="var(--color-primary)" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="label" hide />
-                <YAxis domain={["dataMin-0.05", "dataMax+0.05"]} hide />
-                <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [`${v} m/latido`, "Eficiencia"]} />
-                <Area type="monotone" dataKey="eficiencia" stroke="var(--color-primary)" strokeWidth={2} fill="url(#effGrad)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-      </div>
-
-      {/* Fatigue / Recovery / Readiness */}
-      <div className="grid gap-3 xl:grid-cols-3">
-        <Card icon={ShieldAlert} title="Fatigue Risk" locked={false} teaser="Ratio carga aguda/crónica para anticipar el sobreentrenamiento." question="¿Estoy entrenando por encima de lo que aguanto?" note={get("risk")}>
-          <div className="flex items-center gap-3">
-            <Pill tone={riskTone as "good" | "warn" | "bad"}>{s.risk.level}</Pill>
-            <span className="text-xs text-muted-foreground">
-              ACWR {s.risk.acwr.toFixed(2)} · Monotonía {s.risk.monotony.toFixed(2)}
-            </span>
-          </div>
-          <div className="mt-4 h-32">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={s.risk.series}>
-                <CartesianGrid stroke="var(--color-border)" vertical={false} />
-                <XAxis dataKey="label" stroke="var(--color-muted-foreground)" fontSize={10} tickLine={false} axisLine={false} />
-                <Tooltip contentStyle={tooltipStyle} />
-                <Area type="monotone" dataKey="cronica" stroke="var(--color-muted-foreground)" strokeWidth={1.5} fill="var(--color-secondary)" fillOpacity={0.5} />
-                <Area type="monotone" dataKey="aguda" stroke="var(--color-primary)" strokeWidth={2} fill="transparent" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-          <ul className="mt-3 space-y-1.5 text-xs text-muted-foreground">
-            {s.risk.reasons.map((r) => (
-              <li key={r} className="flex gap-2">
-                <span className="mt-[6px] size-1 shrink-0 rounded-full bg-primary" />
-                {r}
-              </li>
-            ))}
-          </ul>
-          <div className="mt-3 space-y-1.5 text-xs">
-            {s.risk.recommendations.map((r) => (
-              <p key={r} className="rounded-xl border border-border bg-background/40 px-3 py-2">
-                {r}
-              </p>
-            ))}
-          </div>
-        </Card>
-
-        <Card icon={BatteryCharging} title="Recovery Score" question="¿Puedo entrenar fuerte hoy?" note={get("recovery")} delay={0.05}>
-          <div className="flex flex-col items-center">
-            <Ring value={s.recovery.score} label={`${s.recovery.score}`} sub="Recuperación" size={150} />
-            <div className="mt-3">
-              <Pill tone={recTone as "good" | "warn" | "bad"}>{s.recovery.label}</Pill>
-            </div>
-            <p className="mt-3 text-center text-xs text-muted-foreground">
-              Última sesión exigente hace {s.recovery.hoursSinceHard} h
+          {planWeeks.length === 0 ? (
+            <p className="rounded-2xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
+              El plan aún no tiene sesiones con distancia objetivo.
             </p>
-          </div>
-        </Card>
-
-        <Card icon={Flag} title="Race Readiness" locked={isFree} teaser="Cuánto te falta para llegar listo a tu próxima carrera." question="¿Llegaré preparado a mi próxima carrera?" note={get("readiness")} delay={0.1}>
-          <div className="flex items-baseline gap-2">
-            <p className="font-display text-4xl font-semibold">{s.readiness.pct}%</p>
-            <span className="text-xs text-muted-foreground">
-              {s.readiness.race} · {s.readiness.date} · faltan {s.readiness.daysLeft} días
-            </span>
-          </div>
-          <div className="mt-4 space-y-3">
-            {s.readiness.drivers.map((d) => (
-              <Meter key={d.label} label={d.label} value={d.value} />
-            ))}
-          </div>
-        </Card>
-      </div>
-
-      {/* Trend / Balance */}
-      <div className="grid gap-3 xl:grid-cols-3">
-        <Card icon={TrendingUp} title="Performance Trend" locked={false} teaser="Tendencia real de rendimiento ajustada por frecuencia cardíaca." question="¿Voy hacia arriba o hacia abajo?" note={get("trend")} className="xl:col-span-2">
-          <div className="flex items-center gap-3">
-            <Pill tone={s.trend.direction === "Mejorando" ? "good" : s.trend.direction === "Estable" ? "neutral" : "bad"}>
-              {s.trend.direction}
-            </Pill>
-            <span className="text-xs text-muted-foreground">
-              {s.trend.slope > 0 ? "+" : ""}
-              {s.trend.slope}% de rendimiento ajustado por FC (24 semanas)
-            </span>
-          </div>
-          <div className="mt-4 h-52">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={s.trend.series}>
-                <defs>
-                  <linearGradient id="trendGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--color-primary)" stopOpacity={0.4} />
-                    <stop offset="100%" stopColor="var(--color-primary)" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid stroke="var(--color-border)" vertical={false} />
-                <XAxis dataKey="label" stroke="var(--color-muted-foreground)" fontSize={10} tickLine={false} axisLine={false} />
-                <YAxis domain={["dataMin-0.4", "dataMax+0.4"]} stroke="var(--color-muted-foreground)" fontSize={10} tickLine={false} axisLine={false} width={34} />
-                <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [v, "Índice de rendimiento"]} />
-                <Area type="monotone" dataKey="rendimiento" stroke="var(--color-primary)" strokeWidth={2.5} fill="url(#trendGrad)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-          <ul className="mt-3 grid gap-1.5 text-xs text-muted-foreground md:grid-cols-3">
-            {s.trend.causes.map((c) => (
-              <li key={c} className="rounded-xl border border-border px-3 py-2">
-                {c}
-              </li>
-            ))}
-          </ul>
-        </Card>
-
-        <Card icon={Scale} title="Training Balance" locked={false} teaser="Reparto entre suave, umbral y series con corrección semanal." question="¿Está bien repartido mi entrenamiento?" note={get("balance")} delay={0.05}>
-          <div className="space-y-3">
-            {s.balance.buckets.map((b) => (
-              <div key={b.kind}>
-                <div className="flex items-baseline justify-between text-xs">
-                  <span>{b.label}</span>
-                  <span className="text-muted-foreground">
-                    {b.pct}% <span className="opacity-60">/ ideal {b.ideal}%</span>
-                  </span>
-                </div>
-                <div className="relative mt-1.5 h-1.5 overflow-hidden rounded-full bg-secondary">
-                  <motion.div
-                    initial={{ width: 0 }}
-                    animate={{ width: `${b.pct}%` }}
-                    transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-                    className="h-full rounded-full bg-primary"
-                  />
-                  <span className="absolute top-0 h-full w-px bg-foreground/50" style={{ left: `${b.ideal}%` }} />
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="mt-4">
-            <Pill tone={s.balance.balanced ? "good" : "warn"}>
-              {s.balance.balanced ? "Reparto equilibrado" : "Reparto desequilibrado"}
-            </Pill>
-          </div>
-        </Card>
-      </div>
-
-      {/* Runner DNA */}
-      <div className="grid gap-3 xl:grid-cols-3">
-        <Card icon={Dna} title="Runner DNA" locked={isFree} teaser="Tu arquetipo de corredor y la distancia donde más rindes." question="¿Qué tipo de corredor soy realmente?" note={get("dna")} className="xl:col-span-2">
-          <div className="grid gap-4 md:grid-cols-[220px_1fr]">
-            <div className="h-56">
+          ) : (
+            <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <RadarChart data={s.dna.radar} outerRadius="72%">
-                  <PolarGrid stroke="var(--color-border)" />
-                  <PolarAngleAxis dataKey="rasgo" tick={{ fill: "var(--color-muted-foreground)", fontSize: 10 }} />
-                  <Radar dataKey="valor" stroke="var(--color-primary)" fill="var(--color-primary)" fillOpacity={0.25} />
-                  <Tooltip contentStyle={tooltipStyle} />
-                </RadarChart>
+                <BarChart data={planWeeks}>
+                  <CartesianGrid stroke="var(--color-border)" vertical={false} />
+                  <XAxis dataKey="semana" stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} />
+                  <YAxis stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} width={34} />
+                  <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "var(--color-secondary)" }} />
+                  <Bar dataKey="km" radius={[8, 8, 0, 0]} barSize={26}>
+                    {planWeeks.map((w) => (
+                      <Cell
+                        key={w.semana}
+                        fill={w.hechas > 0 ? "var(--color-primary)" : "var(--color-secondary)"}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
               </ResponsiveContainer>
             </div>
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-full bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground">
-                  {s.dna.archetype}
-                </span>
-                <Pill>{s.dna.idealDistance}</Pill>
-                <Pill>{s.dna.idealTerrain}</Pill>
+          )}
+        </Panel>
+
+        <Panel title="Detalles del plan">
+          <ul className="divide-y divide-border text-sm">
+            <li className="flex justify-between py-3">
+              <span className="text-muted-foreground">Objetivo</span>
+              <span className="font-medium">{plan.goal_race ?? "—"}</span>
+            </li>
+            <li className="flex justify-between py-3">
+              <span className="text-muted-foreground">Nivel</span>
+              <span className="font-medium">{plan.level ?? "—"}</span>
+            </li>
+            <li className="flex justify-between py-3">
+              <span className="text-muted-foreground">Inicio</span>
+              <span className="font-medium">
+                {plan.starts_on ? formatRaceDate(plan.starts_on) : "—"}
+              </span>
+            </li>
+            <li className="flex justify-between py-3">
+              <span className="text-muted-foreground">Sesiones completadas</span>
+              <span className="font-medium">
+                {completed} / {sessions.length}
+              </span>
+            </li>
+          </ul>
+        </Panel>
+      </div>
+
+      <Panel
+        title="Semana actual"
+        subtitle={currentWeek ? `Semana ${currentWeek}` : "sin fecha de inicio"}
+      >
+        {weekSessions.length === 0 ? (
+          <p className="rounded-2xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
+            No hay sesiones planificadas para esta semana.
+          </p>
+        ) : (
+          <div className="grid gap-2 md:grid-cols-3">
+            {weekSessions.map((s) => (
+              <div key={s.id} className="rounded-2xl border border-border p-3">
+                <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+                  {s.scheduled_on ? formatRaceDate(s.scheduled_on) : `Semana ${s.week_number}`}
+                </p>
+                <p className="mt-2 text-sm font-medium">{s.title}</p>
+                {s.description && (
+                  <p className="mt-1 text-xs text-muted-foreground">{s.description}</p>
+                )}
               </div>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <div className="rounded-2xl border border-border p-3">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Fortalezas</p>
-                  <ul className="mt-2 space-y-1 text-xs">
-                    {s.dna.strengths.map((x) => (
-                      <li key={x}>{x}</li>
-                    ))}
-                  </ul>
-                </div>
-                <div className="rounded-2xl border border-border p-3">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">A mejorar</p>
-                  <ul className="mt-2 space-y-1 text-xs">
-                    {s.dna.weaknesses.map((x) => (
-                      <li key={x}>{x}</li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-              <ul className="mt-3 space-y-1.5 text-xs text-muted-foreground">
-                {s.dna.toImprove.map((x) => (
-                  <li key={x} className="flex gap-2">
-                    <Zap className="mt-0.5 size-3 shrink-0 text-primary" />
-                    {x}
-                  </li>
-                ))}
-              </ul>
+            ))}
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+/* --------------------------------- Carreras -------------------------------- */
+
+interface Race {
+  id: string;
+  name: string;
+  date: string; // yyyy-mm-dd
+  dist: string;
+  goal: string;
+}
+
+const RACES_KEY = "pace:races";
+
+const defaultRaces: Race[] = [];
+
+const DIST_OPTIONS = ["800 m", "1 500 m", "3 000 m", "5 km", "10 km", "21,1 km", "42,2 km"];
+
+function daysUntil(date: string) {
+  const d = new Date(`${date}T00:00:00`).getTime();
+  if (Number.isNaN(d)) return 0;
+  return Math.max(0, Math.round((d - Date.now()) / 86_400_000));
+}
+
+function formatRaceDate(date: string) {
+  const d = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return "Sin fecha";
+  return d.toLocaleDateString("es-ES", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function RaceCard({
+  race,
+  onChange,
+  onDelete,
+}: {
+  race: Race;
+  onChange: (r: Race) => void;
+  onDelete: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(race);
+
+  useEffect(() => setDraft(race), [race]);
+
+  const input =
+    "w-full min-w-0 rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary";
+
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 14 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="surface-panel p-5"
+    >
+      {editing ? (
+        <div className="space-y-2">
+          <input
+            value={draft.name}
+            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+            placeholder="Nombre de la carrera"
+            className={input}
+          />
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              type="date"
+              value={draft.date}
+              onChange={(e) => setDraft({ ...draft, date: e.target.value })}
+              className={input}
+            />
+            <select
+              value={draft.dist}
+              onChange={(e) => setDraft({ ...draft, dist: e.target.value })}
+              className={input}
+            >
+              {DIST_OPTIONS.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
+          </div>
+          <input
+            value={draft.goal}
+            onChange={(e) => setDraft({ ...draft, goal: e.target.value })}
+            placeholder="Objetivo (ej. Sub 4:15)"
+            className={input}
+          />
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={() => {
+                onChange(draft);
+                setEditing(false);
+              }}
+              className="rounded-full bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground"
+            >
+              Guardar
+            </button>
+            <button
+              onClick={() => {
+                setDraft(race);
+                setEditing(false);
+              }}
+              className="rounded-full border border-border px-4 py-1.5 text-xs"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={onDelete}
+              className="ml-auto rounded-full border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+            >
+              Eliminar
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="flex items-start gap-2">
+            <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-primary/15 text-primary">
+              <Flag className="size-4" />
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium">{race.name}</p>
+              <p className="text-xs text-muted-foreground">{formatRaceDate(race.date)}</p>
             </div>
+            <button
+              onClick={() => setEditing(true)}
+              className="ml-auto rounded-full border border-border px-3 py-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Editar
+            </button>
           </div>
-        </Card>
+          <div className="mt-4 flex items-end justify-between">
+            <div>
+              <p className="font-display text-2xl font-semibold">{daysUntil(race.date)}</p>
+              <p className="text-xs text-muted-foreground">días restantes</p>
+            </div>
+            <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs text-primary">
+              {race.goal}
+            </span>
+          </div>
+          <p className="mt-3 text-xs text-muted-foreground">{race.dist}</p>
+        </>
+      )}
+    </motion.div>
+  );
+}
 
-        <Card icon={Trophy} title="Personal Best Evolution" question="¿Cuánto he mejorado cada marca?" note={get("pbs")} delay={0.05}>
-          <div className="space-y-3">
-            {s.pbs.map((pb) => (
-              <div key={pb.key} className="rounded-2xl border border-border p-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium">{pb.key}</p>
-                  <span className="text-xs text-primary">
-                    {pb.improvementPct > 0 ? `−${pb.improvementPct}%` : "—"}
-                  </span>
-                </div>
-                <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
-                  {pb.years.map((y) => (
-                    <span key={y.year}>
-                      <span className="opacity-60">{y.year}</span> {y.time}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
+interface RaceHistoryPoint {
+  year: string;
+  tiempo: number;
+}
+
+interface PredictionPoint {
+  d: string;
+  km: number;
+  t: string;
+  confidence: number;
+}
+
+const PREDICTION_DISTANCES = [
+  { d: "800 m", km: 0.8 },
+  { d: "1 500 m", km: 1.5 },
+  { d: "3 000 m", km: 3 },
+  { d: "5 K", km: 5 },
+  { d: "10 K", km: 10 },
+  { d: "21 K", km: 21.0975 },
+  { d: "42 K", km: 42.195 },
+] as const;
+
+function estimateRaceTime(activities: Activity[], targetKm: number): { seconds: number; confidence: number } | null {
+  const candidates = activities
+    .map((activity) => {
+      const sourceKm = activityKm(activity);
+      const sourceSeconds = activityMovingSeconds(activity);
+      const pace = activityPaceSeconds(activity);
+      if (sourceKm < 3 || sourceSeconds <= 0 || pace <= 0) return null;
+
+      // Riegel: solo se extrapola desde una sesión real de al menos 3 km.
+      const seconds = sourceSeconds * Math.pow(targetKm / sourceKm, 1.06);
+      const distanceRatio = Math.min(sourceKm, targetKm) / Math.max(sourceKm, targetKm);
+      const confidence = Math.round(Math.min(95, 50 + distanceRatio * 35 + Math.min(10, activities.length)));
+      return { seconds, confidence };
+    })
+    .filter((x): x is { seconds: number; confidence: number } => !!x && x.seconds > 0);
+
+  if (candidates.length === 0) return null;
+  return candidates.reduce((best, current) =>
+    current.seconds < best.seconds ? current : best,
+  );
+}
+
+export function RacesSection() {
+  const [races, setRaces] = useState<Race[]>(defaultRaces);
+  const activities = useActivityList();
+
+  const raceHistory = useMemo<RaceHistoryPoint[]>(() => {
+    const byYear = new Map<number, number>();
+    for (const activity of activities) {
+      const date = activityDate(activity);
+      const km = activityKm(activity);
+      const seconds = activityMovingSeconds(activity);
+      if (!date || km < 3 || seconds <= 0) continue;
+      const equivalent5k = seconds * Math.pow(5 / km, 1.06);
+      const current = byYear.get(date.getFullYear());
+      if (current === undefined || equivalent5k < current) byYear.set(date.getFullYear(), equivalent5k);
+    }
+    return Array.from(byYear.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([year, seconds]) => ({ year: String(year), tiempo: seconds / 3600 }));
+  }, [activities]);
+
+  const predictions = useMemo<PredictionPoint[]>(() => PREDICTION_DISTANCES.map(({ d, km }) => {
+    const result = estimateRaceTime(activities, km);
+    return { d, km, t: result ? formatDuration(result.seconds) : "—", confidence: result?.confidence ?? 0 };
+  }), [activities]);
+
+  useEffect(() => {
+    const raw = window.localStorage.getItem(RACES_KEY);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as Race[];
+        if (Array.isArray(parsed)) setRaces(parsed);
+      } catch {
+        /* ignora datos corruptos */
+      }
+    }
+  }, []);
+
+  const save = (next: Race[]) => {
+    setRaces(next);
+    window.localStorage.setItem(RACES_KEY, JSON.stringify(next));
+  };
+
+  const sorted = useMemo(
+    () => [...races].sort((a, b) => a.date.localeCompare(b.date)),
+    [races],
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold">Próximas carreras</h2>
+          <p className="text-xs text-muted-foreground">
+            Añade tus competiciones y objetivos: de 800 m a maratón.
+          </p>
+        </div>
+        <button
+          onClick={() =>
+            save([
+              ...races,
+              {
+                id: crypto.randomUUID(),
+                name: "Nueva carrera",
+                date: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10),
+                dist: "1 500 m",
+                goal: "Sub 4:20",
+              },
+            ])
+          }
+          className="rounded-full bg-primary px-4 py-2 text-xs font-medium text-primary-foreground transition-transform hover:scale-[1.03]"
+        >
+          + Añadir carrera
+        </button>
       </div>
 
-      {/* Predictions / Goals */}
-      <div className="grid gap-3 xl:grid-cols-3">
-        <Card icon={Target} title="Race Predictions" locked={isFree} teaser="Tu marca estimada hoy de 5 K a maratón." question="¿Qué tiempo haría hoy en cada distancia?" note={get("predictions")} className="xl:col-span-2">
-          <div className="grid gap-3 sm:grid-cols-2">
-            {s.predictions.map((p) => (
-              <div key={p.key} className="rounded-2xl border border-border p-4">
-                <div className="flex items-baseline justify-between">
-                  <p className="text-sm font-medium">{p.label}</p>
-                  <span className="text-[11px] text-muted-foreground">{p.confidence}% confianza</span>
-                </div>
-                <p className="mt-2 font-display text-2xl font-semibold">{p.time}</p>
-                <p className="mt-1 text-[11px] text-primary">{p.deltaVsYearAgo}</p>
-                <p className="mt-2 text-xs text-muted-foreground">{p.toImprove}</p>
-              </div>
-            ))}
-          </div>
-        </Card>
+      <div className="grid gap-3 md:grid-cols-3">
+        {sorted.map((r) => (
+          <RaceCard
+            key={r.id}
+            race={r}
+            onChange={(next) => save(races.map((x) => (x.id === r.id ? next : x)))}
+            onDelete={() => save(races.filter((x) => x.id !== r.id))}
+          />
+        ))}
+      </div>
 
-        <Card icon={Activity} title="Goal Probability" locked={isFree} teaser="Probabilidad real de cumplir cada objetivo." question="¿Qué probabilidad real tengo de lograrlo?" note={get("goals")} delay={0.05}>
+
+      <Panel title="Evolución estimada de 5K" subtitle="derivada de actividades reales">
+        {raceHistory.length === 0 && (
+          <p className="mb-3 rounded-2xl border border-dashed border-border px-4 py-4 text-center text-xs text-muted-foreground">
+            Sin actividades de al menos 3 km para calcular esta evolución.
+          </p>
+        )}
+        <div className="h-64">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={raceHistory}>
+              <CartesianGrid stroke="var(--color-border)" vertical={false} />
+              <XAxis dataKey="year" stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} />
+              <YAxis domain={raceHistory.length > 0 ? ["dataMin-0.05", "dataMax+0.05"] : [0, 1]} stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} width={34} />
+              <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [formatDuration(v * 3600), "5K equivalente"]} />
+              <Line type="monotone" dataKey="tiempo" stroke="var(--color-primary)" strokeWidth={2.5} dot={{ r: 4 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </Panel>
+
+      <PremiumPanel
+        title="Predicción de marca IA"
+        subtitle="modelo Riegel + carga real"
+        teaser="Predicciones de 800 m a maratón calculadas con tus últimas 12 semanas y tu nivel de fatiga."
+      >
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {predictions.map((p) => (
+
+            <div key={p.d} className="rounded-2xl border border-border p-4">
+              <p className="text-xs text-muted-foreground">{p.d}</p>
+              <p className="mt-2 font-display text-2xl font-semibold">{p.t}</p>
+              {p.confidence > 0 ? (
+                <p className="mt-1 text-[11px] text-primary">estimación basada en actividades reales · {p.confidence}%</p>
+              ) : (
+                <p className="mt-1 text-[11px] text-muted-foreground">Sin datos suficientes</p>
+              )}
+            </div>
+          ))}
+        </div>
+      </PremiumPanel>
+    </div>
+
+  );
+}
+
+/* -------------------------------- Objetivos -------------------------------- */
+
+interface Objective {
+  id: string;
+  label: string;
+  progress: number;
+  due: string;
+  type: string;
+}
+
+const initialObjectives: Objective[] = [];
+
+interface PersonalRecord {
+  dist: string;
+  time: string;
+  date: string;
+}
+
+function GoalRow({
+  goal,
+  onChange,
+  onDelete,
+}: {
+  goal: Objective;
+  onChange: (g: Objective) => void;
+  onDelete: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+
+  if (editing) {
+    return (
+      <div className="space-y-3 rounded-2xl border border-border p-4">
+        <input
+          value={goal.label}
+          onChange={(e) => onChange({ ...goal, label: e.target.value })}
+          placeholder="Nombre del objetivo"
+          className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+        />
+        <div className="grid grid-cols-2 gap-2">
+          <input
+            value={goal.type}
+            onChange={(e) => onChange({ ...goal, type: e.target.value })}
+            placeholder="Tipo"
+            className="rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+          />
+          <input
+            value={goal.due}
+            onChange={(e) => onChange({ ...goal, due: e.target.value })}
+            placeholder="Fecha límite"
+            className="rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+          />
+        </div>
+        <div className="flex items-center gap-3">
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={goal.progress}
+            onChange={(e) => onChange({ ...goal, progress: Number(e.target.value) })}
+            className="h-1.5 flex-1 accent-[var(--color-primary)]"
+            aria-label="Progreso"
+          />
+          <span className="w-10 text-right text-xs text-muted-foreground">{goal.progress}%</span>
+        </div>
+        <div className="flex justify-between">
+          <button
+            onClick={onDelete}
+            className="rounded-full border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Eliminar
+          </button>
+          <button
+            onClick={() => setEditing(false)}
+            className="rounded-full bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground"
+          >
+            Guardar
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between text-sm">
+        <span className="flex items-center gap-2">
+          <Target className="size-3.5 text-primary" />
+          {goal.label || "Sin nombre"}
+        </span>
+        <span className="flex items-center gap-3">
+          <span className="text-muted-foreground">{goal.progress}%</span>
+          <button
+            onClick={() => setEditing(true)}
+            className="text-[11px] text-primary underline-offset-2 hover:underline"
+          >
+            Editar
+          </button>
+        </span>
+      </div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-secondary">
+        <motion.div
+          initial={{ width: 0 }}
+          animate={{ width: `${goal.progress}%` }}
+          transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+          className="h-full rounded-full bg-primary"
+        />
+      </div>
+      <p className="mt-1.5 text-[11px] text-muted-foreground">
+        {goal.type} · {goal.due}
+      </p>
+    </div>
+  );
+}
+
+export function GoalsSection() {
+  const [objectives, setObjectives] = useState<Objective[]>(initialObjectives);
+  const activities = useActivityList();
+
+  /** Récords personales calculados con datos reales. */
+  const records = useMemo<PersonalRecord[]>(() => {
+    const result: PersonalRecord[] = [];
+    if (activities.length === 0) return result;
+
+    // Mejor 5K: sesión de al menos 5 km con mejor ritmo medio.
+    const fiveKCandidates = activities.filter(
+      (a) => activityKm(a) >= 5 && activityPaceSeconds(a) > 0,
+    );
+    if (fiveKCandidates.length > 0) {
+      const best = fiveKCandidates.reduce((acc, a) =>
+        activityPaceSeconds(a) < activityPaceSeconds(acc) ? a : acc,
+      );
+      result.push({
+        dist: "Mejor 5K",
+        time: formatDuration(activityPaceSeconds(best) * 5),
+        date: formatShortDate(activityDate(best), best.date),
+      });
+    }
+
+    const withDistance = activities.filter((a) => activityKm(a) > 0);
+    if (withDistance.length > 0) {
+      const longest = withDistance.reduce((acc, a) => (activityKm(a) > activityKm(acc) ? a : acc));
+      result.push({
+        dist: "Mayor distancia",
+        time: `${activityKm(longest).toFixed(2)} km`,
+        date: formatShortDate(activityDate(longest), longest.date),
+      });
+    }
+
+    const withElevation = activities.filter((a) => activityElevation(a) > 0);
+    if (withElevation.length > 0) {
+      const climb = withElevation.reduce((acc, a) =>
+        activityElevation(a) > activityElevation(acc) ? a : acc,
+      );
+      result.push({
+        dist: "Mayor desnivel",
+        time: `${Math.round(activityElevation(climb)).toLocaleString("es-ES")} m`,
+        date: formatShortDate(activityDate(climb), climb.date),
+      });
+    }
+
+    const withSpeed = activities.filter((a) => activitySpeedKmh(a) > 0);
+    if (withSpeed.length > 0) {
+      const fastest = withSpeed.reduce((acc, a) =>
+        activitySpeedKmh(a) > activitySpeedKmh(acc) ? a : acc,
+      );
+      result.push({
+        dist: "Mayor velocidad media",
+        time: `${activitySpeedKmh(fastest).toFixed(2)} km/h`,
+        date: formatShortDate(activityDate(fastest), fastest.date),
+      });
+    }
+
+    return result;
+  }, [activities]);
+
+  return (
+    <div className="grid gap-3 xl:grid-cols-2">
+      <Panel title="Objetivos activos" subtitle={`${objectives.length} en curso`}>
+        <div className="space-y-4">
+          {objectives.map((g) => (
+            <GoalRow
+              key={g.id}
+              goal={g}
+              onChange={(next) =>
+                setObjectives((prev) => prev.map((o) => (o.id === next.id ? next : o)))
+              }
+              onDelete={() => setObjectives((prev) => prev.filter((o) => o.id !== g.id))}
+            />
+          ))}
+          <button
+            onClick={() =>
+              setObjectives((prev) => [
+                ...prev,
+                {
+                  id: `o${Date.now()}`,
+                  label: "Nuevo objetivo",
+                  progress: 0,
+                  due: "Sin fecha",
+                  type: "Personal",
+                },
+              ])
+            }
+            className="w-full rounded-2xl border border-dashed border-border py-2.5 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+          >
+            + Añadir objetivo
+          </button>
+        </div>
+      </Panel>
+
+
+      <Panel title="Récords personales" subtitle="todas las distancias">
+        <div className="divide-y divide-border">
+          {records.length === 0 ? (
+            <p className="rounded-2xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
+              Sin actividades suficientes para calcular récords reales.
+            </p>
+          ) : (
+            records.map((r) => (
+            <div key={r.dist} className="flex items-center justify-between py-3">
+              <span className="flex items-center gap-2 text-sm">
+                <Trophy className="size-3.5 text-primary" />
+                {r.dist}
+              </span>
+              <span className="font-display text-lg font-semibold">{r.time}</span>
+              <span className="text-xs text-muted-foreground">{r.date}</span>
+            </div>
+            ))
+          )}
+        </div>
+      </Panel>
+
+      <Panel
+        className="xl:col-span-2"
+        title="Probabilidad de conseguir tus objetivos"
+        subtitle="solo con datos disponibles"
+      >
+        {objectives.length === 0 ? (
+          <p className="rounded-2xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
+            No hay objetivos definidos. Añade uno para poder medir su progreso.
+          </p>
+        ) : (
           <div className="space-y-4">
-            {s.goals.map((g) => (
-              <div key={g.id}>
-                <div className="flex items-baseline justify-between text-sm">
-                  <span>{g.label}</span>
-                  <span className="font-display font-semibold">{g.probability}%</span>
+            {objectives.map((goal) => (
+              <div key={goal.id}>
+                <div className="flex items-center justify-between text-sm">
+                  <span>{goal.label || "Sin nombre"}</span>
+                  <span className="text-primary">{Math.max(0, Math.min(100, goal.progress))} %</span>
                 </div>
-                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-secondary">
-                  <motion.div
-                    initial={{ width: 0 }}
-                    animate={{ width: `${g.probability}%` }}
-                    transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}
-                    className="h-full rounded-full bg-primary"
-                  />
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-secondary">
+                  <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, goal.progress))}%` }} />
                 </div>
-                <p className="mt-1.5 text-[11px] text-muted-foreground">{g.gapText}</p>
-                <ul className="mt-1.5 space-y-1 text-[11px] text-muted-foreground">
-                  {g.levers.map((l) => (
-                    <li key={l} className="flex gap-2">
-                      <span className="mt-[6px] size-1 shrink-0 rounded-full bg-primary" />
-                      {l}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
-        </Card>
-      </div>
-
-      {/* Heat / Shoes */}
-      <div className="grid gap-3 xl:grid-cols-3">
-        <Card icon={CloudSun} title="Heat Performance" locked={false} teaser="Temperatura, humedad y franja horaria donde rindes más." question="¿En qué condiciones rindo mejor?" note={get("heat")} className="xl:col-span-2">
-          <div className="h-52">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={s.heat.tempBuckets}>
-                <CartesianGrid stroke="var(--color-border)" vertical={false} />
-                <XAxis dataKey="rango" stroke="var(--color-muted-foreground)" fontSize={10} tickLine={false} axisLine={false} />
-                <YAxis reversed domain={["dataMin-10", "dataMax+10"]} tickFormatter={(v: number) => fmtPace(v)} stroke="var(--color-muted-foreground)" fontSize={10} tickLine={false} axisLine={false} width={40} />
-                <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "var(--color-secondary)" }} formatter={(v: number, n) => (n === "ritmo" ? [`${fmtPace(v)} /km`, "Ritmo medio"] : [v, n])} />
-                <Bar dataKey="ritmo" radius={[8, 8, 0, 0]} barSize={26}>
-                  {s.heat.tempBuckets.map((b) => (
-                    <Cell key={b.rango} fill={b.rango === s.heat.bestRange ? "var(--color-primary)" : "var(--color-secondary)"} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-            <p className="rounded-xl border border-border px-3 py-2">
-              Mejor franja horaria: <span className="text-foreground">{s.heat.bestHour}</span>
-            </p>
-            <p className="rounded-xl border border-border px-3 py-2">
-              Humedad &gt;75%: {s.heat.humidityImpact > 0 ? `+${s.heat.humidityImpact}` : s.heat.humidityImpact} s/km · Viento &gt;18 km/h:{" "}
-              {s.heat.windImpact > 0 ? `+${s.heat.windImpact}` : s.heat.windImpact} s/km
-            </p>
-          </div>
-        </Card>
-
-        <Card icon={Footprints} title="Shoe Analytics" locked={false} teaser="Rendimiento y vida útil de cada zapatilla." question="¿Con qué zapatillas rindo más y cuáles debo jubilar?" note={get("shoes")} delay={0.05}>
-          <div className="space-y-3">
-            {s.shoes.map((sh) => (
-              <div key={sh.name} className="rounded-2xl border border-border p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="truncate text-sm font-medium">{sh.name}</p>
-                  <Pill tone={sh.status === "Jubilar" ? "bad" : sh.status === "Revisar pronto" ? "warn" : "good"}>
-                    {sh.status}
-                  </Pill>
-                </div>
-                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-secondary">
-                  <div className="h-full rounded-full bg-primary" style={{ width: `${Math.min(100, sh.lifePct)}%` }} />
-                </div>
-                <p className="mt-2 text-[11px] text-muted-foreground">
-                  {sh.km} km · {sh.pace} · {sh.hr} ppm · {sh.elevation} m D+ · {sh.records} sesiones en su mejor rango
+                <p className="mt-1.5 text-[11px] text-muted-foreground">
+                  Progreso introducido por ti · {goal.type} · {goal.due}
                 </p>
               </div>
             ))}
           </div>
-        </Card>
+        )}
+      </Panel>
+    </div>
+
+  );
+}
+
+/* ------------------------------- Calculadoras ------------------------------ */
+
+function paceFromTime(totalSeconds: number, km: number) {
+  const perKm = totalSeconds / km;
+  const m = Math.floor(perKm / 60);
+  const s = Math.round(perKm % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+interface HrZone {
+  z: string;
+  lo: number;
+  hi: number;
+}
+
+export function CalculatorsSection() {
+  const [dist, setDist] = useState("");
+  const [hours, setHours] = useState("");
+  const [minutes, setMinutes] = useState("");
+  const [seconds, setSeconds] = useState("");
+  const [hrMax, setHrMax] = useState("");
+
+  const num = (v: string) => (v.trim() === "" ? 0 : Number(v));
+  const distN = num(dist);
+  const hrMaxN = num(hrMax);
+
+  const total = num(hours) * 3600 + num(minutes) * 60 + num(seconds);
+  const pace = total > 0 && distN > 0 ? paceFromTime(total, distN) : "—";
+  const speed = total > 0 && distN > 0 ? ((distN / total) * 3600).toFixed(2) : "—";
+
+
+  // Zonas calculadas como porcentaje de la FC máxima introducida (método %FCmáx).
+  const zones: HrZone[] =
+    num(hrMax) > 0
+      ? [
+          { z: "Z1 · Recuperación", lo: 0.5, hi: 0.6 },
+          { z: "Z2 · Aeróbico", lo: 0.6, hi: 0.7 },
+          { z: "Z3 · Tempo", lo: 0.7, hi: 0.8 },
+          { z: "Z4 · Umbral", lo: 0.8, hi: 0.9 },
+          { z: "Z5 · VO2 máx", lo: 0.9, hi: 1 },
+        ]
+      : [];
+
+
+  const inputCls =
+    "w-full rounded-xl border border-border bg-background/60 px-3 py-2.5 text-sm outline-none transition-colors focus:border-primary";
+
+  return (
+    <div className="grid gap-3 xl:grid-cols-2">
+      <Panel title="Calculadora de ritmo" subtitle="distancia y tiempo">
+        <div className="grid gap-3 sm:grid-cols-4">
+          <label className="text-xs text-muted-foreground sm:col-span-4">
+            Distancia (km)
+            <input type="number" inputMode="decimal" placeholder="0" value={dist} min={0.1} step={0.1} onChange={(e) => setDist(e.target.value)} className={`mt-1 ${inputCls}`} />
+          </label>
+          <label className="text-xs text-muted-foreground">
+            Horas
+            <input type="number" inputMode="numeric" placeholder="0" value={hours} min={0} onChange={(e) => setHours(e.target.value)} className={`mt-1 ${inputCls}`} />
+          </label>
+          <label className="text-xs text-muted-foreground">
+            Minutos
+            <input type="number" inputMode="numeric" placeholder="0" value={minutes} min={0} onChange={(e) => setMinutes(e.target.value)} className={`mt-1 ${inputCls}`} />
+          </label>
+          <label className="text-xs text-muted-foreground">
+            Segundos
+            <input type="number" inputMode="numeric" placeholder="0" value={seconds} min={0} onChange={(e) => setSeconds(e.target.value)} className={`mt-1 ${inputCls}`} />
+
+          </label>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="rounded-2xl border border-border p-4">
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Timer className="size-3.5 text-primary" /> Ritmo medio
+            </p>
+            <p className="mt-2 font-display text-2xl font-semibold">{pace} /km</p>
+          </div>
+          <div className="rounded-2xl border border-border p-4">
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Zap className="size-3.5 text-primary" /> Velocidad
+            </p>
+            <p className="mt-2 font-display text-2xl font-semibold">{speed} km/h</p>
+          </div>
+        </div>
+      </Panel>
+
+      <Panel title="Zonas de frecuencia cardíaca" subtitle="método % FC máxima">
+        <label className="text-xs text-muted-foreground">
+          FC máxima (bpm)
+          <input type="number" inputMode="numeric" placeholder="190" value={hrMax} min={120} max={230} onChange={(e) => setHrMax(e.target.value)} className={`mt-1 ${inputCls}`} />
+        </label>
+        {zones.length === 0 && (
+          <p className="mt-4 rounded-2xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
+            Introduce tu FC máxima para calcular tus zonas.
+          </p>
+        )}
+        <div className="mt-4 space-y-2">
+          {zones.map((z) => (
+            <div key={z.z} className="flex items-center justify-between rounded-xl border border-border px-4 py-2.5 text-sm">
+              <span>{z.z}</span>
+              <span className="text-muted-foreground">
+                {Math.round(hrMaxN * z.lo)}–{Math.round(hrMaxN * z.hi)} bpm
+              </span>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Equivalencias de distancia" subtitle="conversión rápida" className="xl:col-span-2">
+        <div className="grid gap-3 sm:grid-cols-4">
+          {[
+            { label: "800 m", km: 0.8 },
+            { label: "1 500 m", km: 1.5 },
+            { label: "3 000 m", km: 3 },
+            { label: "5 K", km: 5 },
+            { label: "10 K", km: 10 },
+            { label: "Media", km: 21.0975 },
+            { label: "Maratón", km: 42.195 },
+
+          ].map((d) => (
+            <div key={d.label} className="rounded-2xl border border-border p-4">
+              <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Ruler className="size-3.5 text-primary" /> {d.label}
+              </p>
+              <p className="mt-2 font-display text-lg font-semibold">
+                {total > 0 && distN > 0 ? paceFromTime((total / distN) * d.km, 1) : "—"} /km
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {(d.km * 0.621371).toFixed(2)} millas
+              </p>
+            </div>
+          ))}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+/* -------------------------------- Estadísticas ------------------------------ */
+
+export function StatsSection() {
+  const activities = useActivityList();
+  const currentYear = useMemo(() => new Date().getFullYear(), []);
+
+  /** Actividades del año en curso. */
+  const yearActivities = useMemo(
+    () =>
+      activities.filter((a) => {
+        const d = activityDate(a);
+        return !!d && d.getFullYear() === currentYear;
+      }),
+    [activities, currentYear],
+  );
+
+  const yearTotals = useMemo(() => computeTotals(yearActivities), [yearActivities]);
+
+  /** Volumen y desnivel agrupados por mes del año en curso. */
+  const yearly = useMemo(() => {
+    const months = MONTH_LABELS.map((mes) => ({ mes, km: 0, elev: 0 }));
+    for (const a of yearActivities) {
+      const d = activityDate(a);
+      if (!d) continue;
+      const bucket = months[d.getMonth()];
+      if (!bucket) continue;
+      bucket.km += activityKm(a);
+      bucket.elev += activityElevation(a);
+    }
+    return months.map((m) => ({
+      mes: m.mes,
+      km: Number(m.km.toFixed(1)),
+      elev: Math.round(m.elev),
+    }));
+  }, [yearActivities]);
+
+  /** Momentos destacados calculados con datos reales. */
+  const highlights = useMemo(() => {
+    const items: { icon: typeof Mountain; title: string; value: string }[] = [];
+    if (activities.length === 0) return items;
+
+    const withElevation = activities.filter((a) => activityElevation(a) > 0);
+    if (withElevation.length > 0) {
+      const best = withElevation.reduce((acc, a) =>
+        activityElevation(a) > activityElevation(acc) ? a : acc,
+      );
+      items.push({
+        icon: Mountain,
+        title: "Mayor desnivel",
+        value: `${Math.round(activityElevation(best)).toLocaleString("es-ES")} m · ${best.title}`,
+      });
+    }
+
+    const withDistance = activities.filter((a) => activityKm(a) > 0);
+    if (withDistance.length > 0) {
+      const best = withDistance.reduce((acc, a) => (activityKm(a) > activityKm(acc) ? a : acc));
+      items.push({
+        icon: Ruler,
+        title: "Mayor distancia",
+        value: `${activityKm(best).toFixed(2)} km · ${best.title}`,
+      });
+    }
+
+    const withPace = activities.filter((a) => activityPaceSeconds(a) > 0);
+    if (withPace.length > 0) {
+      const best = withPace.reduce((acc, a) =>
+        activityPaceSeconds(a) < activityPaceSeconds(acc) ? a : acc,
+      );
+      items.push({
+        icon: Timer,
+        title: "Sesión más rápida",
+        value: `${formatPace(activityPaceSeconds(best))} /km · ${best.title}`,
+      });
+    }
+
+    const withHr = activities.filter((a) => activityHr(a) > 0);
+    if (withHr.length > 0) {
+      const best = withHr.reduce((acc, a) => (activityHr(a) > activityHr(acc) ? a : acc));
+      items.push({
+        icon: HeartPulse,
+        title: "Mayor FC media",
+        value: `${Math.round(activityHr(best))} bpm · ${best.title}`,
+      });
+    }
+
+    return items;
+  }, [activities]);
+
+  /** Resumen anual: todo se deriva de las sesiones reales del año. */
+  const yearSummary = useMemo(() => {
+    const sessions = yearActivities.length;
+    const km = yearTotals.km;
+    const weeksElapsed = Math.max(
+      1,
+      Math.ceil(
+        (Date.now() - new Date(currentYear, 0, 1).getTime()) / (7 * 86400000),
+      ),
+    );
+    const hrRows = yearActivities.filter((a) => activityHr(a) > 0);
+    const paceRows = yearActivities.filter((a) => activityPaceSeconds(a) > 0);
+    const longest = yearActivities.reduce((acc, a) => Math.max(acc, activityKm(a)), 0);
+
+    return [
+      { label: "Media semanal", value: `${(km / weeksElapsed).toFixed(1)} km` },
+      {
+        label: "Distancia media por sesión",
+        value: sessions > 0 ? `${(km / sessions).toFixed(2)} km` : "0 km",
+      },
+      { label: "Sesión más larga", value: `${longest.toFixed(2)} km` },
+      {
+        label: "Ritmo medio",
+        value:
+          paceRows.length > 0
+            ? `${formatPace(
+                paceRows.reduce((acc, a) => acc + activityPaceSeconds(a), 0) / paceRows.length,
+              )} /km`
+            : "—",
+      },
+      {
+        label: "FC media",
+        value:
+          hrRows.length > 0
+            ? `${Math.round(hrRows.reduce((acc, a) => acc + activityHr(a), 0) / hrRows.length)} bpm`
+            : "—",
+      },
+    ];
+  }, [yearActivities, yearTotals, currentYear]);
+
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Stat label={`Total ${currentYear}`} value={yearTotals.km.toFixed(1)} unit="km" />
+<Stat label="Desnivel total" value={Math.round(yearTotals.elevation).toLocaleString("es-ES")} unit="m" />
+<Stat label="Sesiones" value={String(yearTotals.sessions)} />
+<Stat label="Horas corriendo" value={formatHours(yearTotals.seconds)} unit="h" />
       </div>
 
-      {/* AI insight del último entrenamiento + recomendaciones */}
-      <div className="grid gap-3 xl:grid-cols-2">
-        <Card icon={Sparkles} title="AI Insight del último entrenamiento" locked={isFree} teaser="Lectura del entrenador IA sobre cada sesión." question="¿Qué me dice mi última sesión?">
-          <p className="text-sm font-medium">
-            {s.report.activity.distanceKm.toFixed(1)} km ·{" "}
-            {new Date(s.report.activity.date).toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "short" })}
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {fmtPace(s.report.activity.paceS)} /km · {s.report.activity.avgHr} ppm · {s.report.activity.cadence} spm ·{" "}
-            {s.report.activity.elevationM} m D+
-          </p>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-2xl border border-primary/30 bg-primary/5 p-3">
-              <p className="text-[11px] uppercase tracking-[0.16em] text-primary">Qué ha salido bien</p>
-              <ul className="mt-2 space-y-1 text-xs">
-                {s.report.good.map((g) => (
-                  <li key={g}>{g}</li>
-                ))}
-              </ul>
-            </div>
-            <div className="rounded-2xl border border-border p-3">
-              <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Qué mejorar</p>
-              <ul className="mt-2 space-y-1 text-xs">
-                {s.report.improve.map((g) => (
-                  <li key={g}>{g}</li>
-                ))}
-              </ul>
-            </div>
-          </div>
-          <div className="mt-3 space-y-2 text-xs text-muted-foreground">
-            <p className="rounded-xl border border-border px-3 py-2">{s.report.goalImpact}</p>
-            <p className="rounded-xl border border-border px-3 py-2">{s.report.iqImpact}</p>
-            <p className="rounded-xl border border-border px-3 py-2">Mañana: {s.report.tomorrow}</p>
-          </div>
-        </Card>
+      <WeekComparison />
 
-        <Card icon={Zap} title="Smart Recommendations" locked={isFree} teaser="Qué hacer exactamente hoy, mañana y esta semana." question="¿Qué debería hacer exactamente ahora?" delay={0.05}>
-          <div className="space-y-2">
-            {s.recommendations.map((r) => (
-              <div key={r.action} className="rounded-2xl border border-border p-4">
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`size-2 rounded-full ${
-                      r.tone === "positivo" ? "bg-primary" : r.tone === "cuidado" ? "bg-destructive" : "bg-muted-foreground"
-                    }`}
-                  />
-                  <p className="text-sm font-medium">{r.action}</p>
-                </div>
-                <p className="mt-1.5 text-xs text-muted-foreground">{r.reason}</p>
+      <div className="grid gap-3 xl:grid-cols-3">
+        <Panel title="Volumen y desnivel" subtitle="año en curso" className="xl:col-span-2">
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={yearly}>
+                <CartesianGrid stroke="var(--color-border)" vertical={false} />
+                <XAxis dataKey="mes" stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} />
+                <YAxis yAxisId="km" stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} width={34} />
+                <YAxis yAxisId="elev" orientation="right" hide />
+                <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "var(--color-secondary)" }} />
+                <Bar yAxisId="km" dataKey="km" radius={[8, 8, 0, 0]} fill="var(--color-primary)" barSize={22} />
+                <Line yAxisId="elev" type="monotone" dataKey="elev" stroke="var(--color-chart-2, var(--color-muted-foreground))" strokeWidth={2} dot={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </Panel>
+
+        <Panel title="Resumen del año" subtitle="calculado con tus sesiones">
+          {yearActivities.length === 0 ? (
+            <p className="rounded-2xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
+              Sin sesiones registradas este año.
+            </p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {yearSummary.map((r) => (
+                <li key={r.label} className="flex items-center justify-between py-3 text-sm">
+                  <span className="text-muted-foreground">{r.label}</span>
+                  <span className="font-display font-semibold">{r.value}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+      </div>
+
+      <Panel title="Momentos destacados" subtitle={`temporada ${currentYear}`}>
+        {highlights.length === 0 && (
+          <p className="rounded-2xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
+            Todavía no hay sesiones suficientes para destacar nada.
+          </p>
+        )}
+        <div className="grid gap-3 md:grid-cols-3">
+          {highlights.map((h) => (
+            <div key={h.title} className="rounded-2xl border border-border p-4">
+              <h.icon className="size-4 text-primary" />
+              <p className="mt-3 text-sm font-medium">{h.title}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{h.value}</p>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <PremiumPanel
+        label="ELITE"
+        title="Exportación e informes avanzados"
+        subtitle="CSV · GPX · API"
+        teaser="Descarga todos tus datos, conecta la API de PACE y genera informes para tu entrenador."
+      >
+        <div className="grid gap-3 md:grid-cols-3">
+          {[
+            { t: "Exportar temporada", v: `CSV con ${activities.length} sesiones` },
+            { t: "Archivos GPX", v: "Descarga masiva de rutas" },
+            { t: "API PACE", v: "Token personal + webhooks" },
+          ].map((e) => (
+            <div key={e.t} className="rounded-2xl border border-border p-4">
+              <p className="text-sm font-medium">{e.t}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{e.v}</p>
+            </div>
+          ))}
+        </div>
+      </PremiumPanel>
+    </div>
+
+  );
+}
+
+/* ---------------------------------- Perfil --------------------------------- */
+
+export function ProfileSection({ name, email }: { name: string; email: string }) {
+  const { tier } = usePlanTier();
+  const isFree = tier === "free";
+  const fields = [
+  { label:"Nombre", value:name },
+  { label:"Email", value:email },
+  ];
+  const perks: Record<string, string[]> = {
+    free: ["Métricas básicas", "Runner IQ y consistencia", "30 días de histórico"],
+    pro: ["IA Coach ilimitado", "Planes adaptativos", "Predicciones avanzadas"],
+    elite: ["Todo lo de PRO", "Panel de entrenador", "Exportación y API"],
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-3 xl:grid-cols-3">
+        <Panel title="Tu perfil" subtitle="datos personales" className="xl:col-span-2">
+          <div className="grid gap-3 sm:grid-cols-2">
+            {fields.map((f) => (
+              <div key={f.label} className="rounded-2xl border border-border p-4">
+                <p className="text-xs text-muted-foreground">{f.label}</p>
+                <p className="mt-1 truncate text-sm font-medium">{f.value}</p>
               </div>
             ))}
           </div>
-        </Card>
+        </Panel>
+
+        <Panel title="Suscripción" subtitle={`Plan ${tier}`}>
+          <div className="rounded-2xl border border-primary/40 bg-primary/5 p-4">
+            <p className="font-display text-xl font-semibold uppercase">{tier}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {isFree ? "Sin coste · funciones limitadas" : "Renovación 12 sep 2026"}
+            </p>
+            <ul className="mt-4 space-y-2 text-sm">
+              {(perks[tier] ?? perks["free"]!).map((f) => (
+                <li key={f} className="flex items-center gap-2">
+                  <Check className="size-3.5 text-primary" />
+                  {f}
+                </li>
+              ))}
+            </ul>
+            {isFree && (
+              <button
+                onClick={requestUpgrade}
+                className="mt-5 w-full rounded-full bg-primary px-4 py-2.5 text-xs font-medium text-primary-foreground transition-transform hover:scale-[1.02]"
+              >
+                Pasar a PRO · 12 €/mes
+              </button>
+            )}
+          </div>
+        </Panel>
       </div>
+
+      <div className="grid gap-3 md:grid-cols-3">
+        {[
+          {
+            key: "free",
+            name: "Free",
+            price: "0 €",
+            desc: "Lo esencial para seguir tu entrenamiento",
+            has: ["Métricas básicas: km, ritmo, FC", "Runner IQ y consistencia", "Historial de 30 días", "5 mensajes/día con la IA"],
+            not: ["Efficiency Score", "Fatigue Risk avanzado", "Predicciones de marca", "Runner DNA", "Planes adaptativos", "Informe semanal"],
+          },
+          {
+            key: "pro",
+            name: "Pro",
+            price: "12 €/mes",
+            desc: "Toda la inteligencia PACE sobre tus datos",
+            has: ["Todo lo de Free, sin límites", "Efficiency Score y Fatigue Risk", "Predicciones de 5 K a maratón", "Runner DNA y Training Balance", "IA Coach ilimitado + análisis por sesión", "Planes adaptativos e informe semanal"],
+            not: ["Panel de entrenador y equipo", "Exportación CSV/GPX y API"],
+          },
+          {
+            key: "elite",
+            name: "Elite",
+            price: "29 €/mes",
+            desc: "Para entrenadores y corredores avanzados",
+            has: ["Todo lo de PRO", "Panel de entrenador y equipo", "Exportación CSV/GPX y API", "Soporte prioritario"],
+            not: [],
+          },
+        ].map((p) => (
+          <div
+            key={p.key}
+            className={`surface-panel p-5 ${p.key === tier ? "border-primary/50 ring-1 ring-primary/30" : ""}`}
+          >
+            <div className="flex items-baseline justify-between">
+              <p className="font-display text-lg font-semibold">{p.name}</p>
+              <span className="text-xs text-muted-foreground">{p.price}</span>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">{p.desc}</p>
+            <ul className="mt-4 space-y-2 text-xs">
+              {p.has.map((f) => (
+                <li key={f} className="flex gap-2">
+                  <Check className="mt-0.5 size-3.5 shrink-0 text-primary" />
+                  <span>{f}</span>
+                </li>
+              ))}
+              {p.not.map((f) => (
+                <li key={f} className="flex gap-2 text-muted-foreground/70">
+                  <Lock className="mt-0.5 size-3.5 shrink-0" />
+                  <span className="line-through decoration-muted-foreground/40">{f}</span>
+                </li>
+              ))}
+            </ul>
+            {p.key !== tier && p.key !== "free" && (
+              <button
+                onClick={requestUpgrade}
+                className="mt-5 w-full rounded-full border border-primary/50 bg-primary/10 px-4 py-2 text-xs font-medium text-primary transition-colors hover:bg-primary hover:text-primary-foreground"
+              >
+                Pasar a {p.name}
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <PlanComparison tier={tier} />
+
+      <StravaConnect />
+
+      <EditorUnlock />
+
+
+
+    </div>
+  );
+}
+
+
+/* ------------------------------- Configuración ------------------------------ */
+
+function Toggle({ label, hint, defaultOn }: { label: string; hint: string; defaultOn?: boolean }) {
+  const [on, setOn] = useState(!!defaultOn);
+  return (
+    <button
+      onClick={() => setOn((v) => !v)}
+      className="flex w-full items-center justify-between rounded-2xl border border-border p-4 text-left transition-colors hover:bg-secondary/40"
+    >
+      <span>
+        <span className="block text-sm font-medium">{label}</span>
+        <span className="block text-xs text-muted-foreground">{hint}</span>
+      </span>
+      <span className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${on ? "bg-primary" : "bg-secondary"}`}>
+        <motion.span
+          layout
+          transition={{ type: "spring", stiffness: 500, damping: 32 }}
+          className={`absolute top-1 size-4 rounded-full bg-background ${on ? "left-6" : "left-1"}`}
+        />
+      </span>
+    </button>
+  );
+}
+
+export function SettingsSection() {
+  return (
+    <div className="grid gap-3 xl:grid-cols-2">
+      <Panel title="Notificaciones" subtitle="avisos y resúmenes">
+        <div className="space-y-2">
+          <Toggle label="Email" hint="Resumen semanal y análisis IA" defaultOn />
+          <Toggle label="Push" hint="Nuevas actividades y récords" defaultOn />
+          <Toggle label="Informe semanal" hint="Cada lunes a las 8:00" defaultOn />
+        </div>
+      </Panel>
+
+      <Panel title="Preferencias" subtitle="app y unidades">
+        <div className="space-y-2">
+          <div className="flex items-center justify-between rounded-2xl border border-border p-4">
+            <span className="flex items-center gap-2 text-sm">
+              <Globe className="size-4 text-primary" /> Idioma
+            </span>
+            <span className="text-sm text-muted-foreground">Español</span>
+          </div>
+          <div className="flex items-center justify-between rounded-2xl border border-border p-4">
+            <span className="flex items-center gap-2 text-sm">
+              <Calculator className="size-4 text-primary" /> Unidades
+            </span>
+            <span className="text-sm text-muted-foreground">Métricas (km)</span>
+          </div>
+          <div className="flex items-center justify-between rounded-2xl border border-border p-4">
+            <span className="flex items-center gap-2 text-sm">
+              <Moon className="size-4 text-primary" /> Tema
+            </span>
+            <span className="text-sm text-muted-foreground">Oscuro</span>
+          </div>
+          <Toggle label="Análisis IA automático" hint="Analiza cada entrenamiento al importarlo" defaultOn />
+          <div className="flex items-center justify-between rounded-2xl border border-border p-4">
+            <span className="flex items-center gap-2 text-sm">
+              <Bell className="size-4 text-primary" /> Recordatorios
+            </span>
+            <span className="text-sm text-muted-foreground">1 h antes</span>
+          </div>
+        </div>
+      </Panel>
+
+      <PremiumPanel
+        className="xl:col-span-2"
+        title="Automatizaciones PRO"
+        subtitle="informes y avisos inteligentes"
+        teaser="Informe semanal automático, alertas de fatiga y análisis IA de cada entrenamiento importado."
+      >
+        <div className="space-y-2">
+          <Toggle label="Informe semanal IA" hint="Resumen con carga, forma y plan de la semana" defaultOn />
+          <Toggle label="Alerta de fatiga" hint="Aviso cuando tu ACWR supera 1,3" defaultOn />
+          <Toggle label="Aviso de récord" hint="Detecta marcas personales al importar" defaultOn />
+        </div>
+      </PremiumPanel>
     </div>
   );
 }
