@@ -76,38 +76,49 @@ export function MetricGrid() {
   return (
     <div className="grid grid-cols-2 gap-2.5 sm:gap-3 xl:grid-cols-4">
       {metrics.map((m, i) => {
-        const positive = m.delta >= 0;
-        return (
-          <motion.article
-            key={m.id}
-            initial={{ opacity: 0, y: 14 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.04, duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-            className="surface-panel p-3.5 sm:p-4"
-          >
-            <p className="truncate text-xs text-muted-foreground">{m.label}</p>
-            <div className="mt-2 flex items-end gap-1">
-              <span className="font-display text-xl font-semibold sm:text-2xl">{m.value}</span>
-              {m.unit && <span className="pb-0.5 text-xs text-muted-foreground">{m.unit}</span>}
-            </div>
-            <div className="mt-2 flex items-center justify-between gap-1">
-              <span className="truncate text-[11px] text-muted-foreground">{m.hint}</span>
-              <span
-                className={`inline-flex items-center gap-0.5 text-[11px] ${
-                  positive ? "text-success" : "text-destructive"
-                }`}
-              >
-                {positive ? (
-                  <ArrowUpRight className="size-3" />
-                ) : (
-                  <ArrowDownRight className="size-3" />
-                )}
-                {Math.abs(m.delta)}%
-              </span>
-            </div>
-          </motion.article>
-        );
-      })}
+  const hasDelta = m.delta !== null;
+  const positive = m.delta !== null && m.delta >= 0;
+
+  return (
+    <motion.article
+      key={m.id}
+      initial={{ opacity: 0, y: 14 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{
+        delay: i * 0.04,
+        duration: 0.5,
+        ease: [0.16, 1, 0.3, 1],
+      }}
+      className="surface-panel p-3.5 sm:p-4"
+    >
+      {/* ...tus datos... */}
+
+      <span
+        className={`inline-flex items-center gap-0.5 text-[11px] ${
+          !hasDelta
+            ? "text-muted-foreground"
+            : positive
+              ? "text-success"
+              : "text-destructive"
+        }`}
+      >
+        {hasDelta ? (
+          <>
+            {positive ? (
+              <ArrowUpRight className="size-3" />
+            ) : (
+              <ArrowDownRight className="size-3" />
+            )}
+
+            {Math.abs(m.delta ?? 0)}%
+          </>
+        ) : (
+          "Sin referencia"
+        )}
+      </span>
+    </motion.article>
+  );
+})}
     </div>
   );
 }

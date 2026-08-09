@@ -141,12 +141,67 @@ function sessionLoad(a: PieActivity): number {
 /* Runner IQ                                                                  */
 /* -------------------------------------------------------------------------- */
 
+/* -------------------------------------------------------------------------- */
+/* Runner IQ                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/* -------------------------------------------------------------------------- */
+/* Runner IQ                                                                  */
+/* -------------------------------------------------------------------------- */
+
 export interface IQComponent {
   key: string;
   label: string;
   value: number;
   weight: number;
   hint: string;
+}
+
+function percentileScore(
+  value: number,
+  values: number[],
+  higherIsBetter = true,
+): number {
+  const valid = values.filter(
+    (v) => Number.isFinite(v),
+  );
+
+  if (valid.length === 0 || !Number.isFinite(value)) {
+    return 50;
+  }
+
+  if (valid.length === 1) {
+    return 50;
+  }
+
+  const sorted = [...valid].sort(
+    (a, b) => a - b,
+  );
+
+  const rank = sorted.filter(
+    (v) =>
+      higherIsBetter
+        ? v <= value
+        : v >= value,
+  ).length;
+
+  return clamp(
+    (rank / sorted.length) * 100,
+  );
+}
+
+function meanValid(
+  values: number[],
+): number {
+  const valid = values.filter(
+    (v) =>
+      Number.isFinite(v) &&
+      v > 0,
+  );
+
+  return valid.length > 0
+    ? avg(valid)
+    : 0;
 }
 
 function computeIQAt(
@@ -158,11 +213,18 @@ function computeIQAt(
       score: number;
       components: IQComponent[];
     } {
-  const win = (
-    from: number,
-    to: number,
-  ): PieActivity[] =>
-    acts.filter((a) => {
+  const referenceEnd =
+    PIE_TODAY.getTime() -
+    daysAgo * DAY;
+
+  /*
+   * Usamos exclusivamente actividades existentes.
+   *
+   * La ventana principal son los 28 días anteriores
+   * al punto que estamos evaluando.
+   */
+  const current = acts.filter(
+    (a) => {
       const t = safeDateMs(a.date);
 
       if (!Number.isFinite(t)) {
@@ -170,208 +232,501 @@ function computeIQAt(
       }
 
       return (
-        t >=
-          PIE_TODAY.getTime() -
-            (daysAgo + from) * DAY &&
-        t <=
-          PIE_TODAY.getTime() -
-            (daysAgo + to) * DAY
+        t <= referenceEnd &&
+        t >
+          referenceEnd -
+            28 * DAY
       );
-    });
+    },
+  );
 
-  const last28 = win(28, 0);
-  const prev28 = win(56, 28);
-  const last90 = win(90, 0);
+  /*
+   * Si no hay actividades en esa ventana,
+   * buscamos las anteriores para poder comparar
+   * al atleta consigo mismo.
+   */
+  const historical = acts.filter(
+    (a) => {
+      const t = safeDateMs(a.date);
 
-  if (last28.length === 0) {
+      if (!Number.isFinite(t)) {
+        return false;
+      }
+
+      return t <= referenceEnd;
+    },
+  );
+
+  if (current.length === 0) {
     return 0;
   }
 
-  /* --------------------------- Consistencia --------------------------- */
+  /* ---------------------------------------------------------------------- */
+  /* 1. Consistencia                                                        */
+  /* ---------------------------------------------------------------------- */
 
-  const consistency = clamp(
-    (last28.length / 4 / 5) * 100,
-  );
+  const currentDates = current
+    .map((a) =>
+      safeDateMs(a.date),
+    )
+    .filter((d) =>
+      Number.isFinite(d),
+    );
 
-  /* ------------------------------ Volumen ----------------------------- */
-
-  const volume = clamp(
-    (
-      sum(
-        last28.map((a) =>
-          safeNumber(a.distanceKm),
+  const currentWeeks = new Set(
+    currentDates.map(
+      (d) =>
+        Math.floor(
+          d / DAY / 7,
         ),
-      ) /
-      4 /
-      70
-    ) * 100,
+    ),
+  ).size;
+
+  const consistencyValues =
+    Array.from(
+      { length: 12 },
+      (_, i) => {
+        const end =
+          referenceEnd -
+          i * 28 * DAY;
+
+        const start =
+          end -
+          28 * DAY;
+
+        const block =
+          acts.filter(
+            (a) => {
+              const t =
+                safeDateMs(
+                  a.date,
+                );
+
+              return (
+                Number.isFinite(t) &&
+                t <= end &&
+                t > start
+              );
+            },
+          );
+
+        return block.length;
+      },
+    );
+
+  const consistency = percentileScore(
+    current.length,
+    consistencyValues,
+    true,
   );
 
-  /* -------------------------------- Ritmo ------------------------------ */
+  /* ---------------------------------------------------------------------- */
+  /* 2. Volumen                                                             */
+  /* ---------------------------------------------------------------------- */
 
-  const meanPace = avg(
-    last28.map((a) =>
-      safeNumber(a.paceS),
+  const currentVolume = sum(
+    current.map((a) =>
+      safeNumber(
+        a.distanceKm,
+      ),
     ),
   );
 
-  const pace = clamp(
-    100 -
-      ((meanPace - 230) / 130) * 60,
+  const volumeValues =
+    Array.from(
+      { length: 12 },
+      (_, i) => {
+        const end =
+          referenceEnd -
+          i * 28 * DAY;
+
+        const start =
+          end -
+          28 * DAY;
+
+        return sum(
+          acts
+            .filter(
+              (a) => {
+                const t =
+                  safeDateMs(
+                    a.date,
+                  );
+
+                return (
+                  Number.isFinite(
+                    t,
+                  ) &&
+                  t <= end &&
+                  t > start
+                );
+              },
+            )
+            .map((a) =>
+              safeNumber(
+                a.distanceKm,
+              ),
+            ),
+        );
+      },
+    );
+
+  const volume = percentileScore(
+    currentVolume,
+    volumeValues,
+    true,
   );
 
-  /* ------------------------- Eficiencia cardíaca ---------------------- */
+  /* ---------------------------------------------------------------------- */
+  /* 3. Ritmo                                                               */
+  /* ---------------------------------------------------------------------- */
 
-  const efficiencyValues = last28
-    .map((a) => {
-      const distance = safeNumber(a.distanceKm);
-      const hr = safeNumber(a.avgHr);
-      const time = safeNumber(a.movingTimeS);
-
-      if (
-        distance <= 0 ||
-        hr <= 0 ||
-        time <= 0
-      ) {
-        return 0;
-      }
-
-      return (
-        (distance * 1000) /
-        (hr * (time / 60))
-      );
-    })
-    .filter((v) => v > 0);
-
-  const eff = avg(efficiencyValues);
-
-  const heart = clamp(
-    ((eff - 0.9) / 0.9) * 100,
-  );
-
-  /* ----------------------------- Recovery ----------------------------- */
-
-  const previousHr = avg(
-    prev28
-      .map((a) => safeNumber(a.avgHr))
-      .filter((v) => v > 0),
-  );
-
-  const currentHr = avg(
-    last28
-      .map((a) => safeNumber(a.avgHr))
-      .filter((v) => v > 0),
-  );
-
-  const recovery =
-    prev28.length > 0
-      ? clamp(
-          50 +
-            (previousHr - currentHr) * 8,
-        )
-      : 50;
-
-  /* ----------------------------- Evolución ---------------------------- */
-
-  const thirdLength = Math.max(
-    1,
-    Math.floor(last90.length / 3),
-  );
-
-  const oldPace = avg(
-    last90
-      .slice(0, thirdLength)
+  const currentPaces =
+    current
       .map((a) =>
-        safeNumber(a.paceS),
+        safeNumber(
+          a.paceS,
+        ),
       )
-      .filter((v) => v > 0),
+      .filter(
+        (v) => v > 0,
+      );
+
+  const currentPace =
+    meanValid(currentPaces);
+
+  const paceValues =
+    historical
+      .map((a) =>
+        safeNumber(
+          a.paceS,
+        ),
+      )
+      .filter(
+        (v) => v > 0,
+      );
+
+  /*
+   * Para ritmo, cuanto menor sea el tiempo/km,
+   * mejor es el rendimiento.
+   */
+  const pace = percentileScore(
+    currentPace,
+    paceValues,
+    false,
   );
 
-  const evolution =
-    oldPace > 0 && meanPace > 0
-      ? clamp(
-          50 +
-            (oldPace - meanPace) * 2.2,
-        )
-      : 50;
+  /* ---------------------------------------------------------------------- */
+  /* 4. Eficiencia cardíaca                                                 */
+  /* ---------------------------------------------------------------------- */
 
-  /* -------------------------------- Carga ------------------------------ */
+  const efficiencyOf = (
+    xs: PieActivity[],
+  ): number => {
+    const values = xs
+      .map((a) => {
+        const distance =
+          safeNumber(
+            a.distanceKm,
+          );
 
-  const acute = sum(
-    win(7, 0).map(sessionLoad),
-  );
+        const hr =
+          safeNumber(
+            a.avgHr,
+          );
 
-  const chronic =
+        const time =
+          safeNumber(
+            a.movingTimeS,
+          );
+
+        if (
+          distance <= 0 ||
+          hr <= 0 ||
+          time <= 0
+        ) {
+          return 0;
+        }
+
+        /*
+         * Distancia recorrida por minuto y ppm.
+         * Cuanto mayor, mejor.
+         */
+        return (
+          (distance * 1000) /
+          (hr * (time / 60))
+        );
+      })
+      .filter(
+        (v) => v > 0,
+      );
+
+    return avg(values);
+  };
+
+  const currentEfficiency =
+    efficiencyOf(current);
+
+  const efficiencyValues =
+    historical
+      .map((a) => {
+        const distance =
+          safeNumber(
+            a.distanceKm,
+          );
+
+        const hr =
+          safeNumber(
+            a.avgHr,
+          );
+
+        const time =
+          safeNumber(
+            a.movingTimeS,
+          );
+
+        if (
+          distance <= 0 ||
+          hr <= 0 ||
+          time <= 0
+        ) {
+          return 0;
+        }
+
+        return (
+          (distance * 1000) /
+          (hr * (time / 60))
+        );
+      })
+      .filter(
+        (v) => v > 0,
+      );
+
+  const heart =
+    percentileScore(
+      currentEfficiency,
+      efficiencyValues,
+      true,
+    );
+
+  /* ---------------------------------------------------------------------- */
+  /* 5. Recuperación / carga                                                */
+  /* ---------------------------------------------------------------------- */
+
+  const loadOf = (
+    xs: PieActivity[],
+  ): number =>
     sum(
-      win(28, 0).map(sessionLoad),
-    ) / 4;
+      xs.map(sessionLoad),
+    );
 
-  const ratio =
-    chronic > 0
-      ? acute / chronic
-      : 1;
+  const currentLoad =
+    loadOf(current);
 
-  const load = clamp(
-    100 -
-      Math.abs(ratio - 1.05) * 130,
-  );
+  const loadValues =
+    Array.from(
+      { length: 12 },
+      (_, i) => {
+        const end =
+          referenceEnd -
+          i * 28 * DAY;
+
+        const start =
+          end -
+          28 * DAY;
+
+        return loadOf(
+          acts.filter(
+            (a) => {
+              const t =
+                safeDateMs(
+                  a.date,
+                );
+
+              return (
+                Number.isFinite(
+                  t,
+                ) &&
+                t <= end &&
+                t > start
+              );
+            },
+          ),
+        );
+      },
+    ).filter(
+      (v) => v > 0,
+    );
+
+  /*
+   * Una carga excesivamente alta no es automáticamente
+   * mejor. Buscamos una carga cercana al comportamiento
+   * habitual del propio corredor.
+   */
+  let recovery = 50;
+
+  if (
+    loadValues.length >= 2 &&
+    currentLoad > 0
+  ) {
+    const historicalLoad =
+      avg(loadValues);
+
+    if (
+      historicalLoad > 0
+    ) {
+      const deviation =
+        Math.abs(
+          currentLoad -
+            historicalLoad,
+        ) /
+        historicalLoad;
+
+      recovery = clamp(
+        100 -
+          deviation * 100,
+      );
+    }
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* 6. Evolución                                                           */
+  /* ---------------------------------------------------------------------- */
+
+  const previousBlock =
+    acts.filter(
+      (a) => {
+        const t =
+          safeDateMs(a.date);
+
+        return (
+          Number.isFinite(t) &&
+          t <=
+            referenceEnd -
+              28 * DAY &&
+          t >
+            referenceEnd -
+              56 * DAY
+        );
+      },
+    );
+
+  const previousPace =
+    meanValid(
+      previousBlock.map(
+        (a) =>
+          safeNumber(
+            a.paceS,
+          ),
+      ),
+    );
+
+  let evolution = 50;
+
+  if (
+    previousPace > 0 &&
+    currentPace > 0
+  ) {
+    /*
+     * Positivo = actualmente más rápido.
+     */
+    const improvement =
+      (
+        previousPace -
+        currentPace
+      ) /
+      previousPace;
+
+    /*
+     * Convertimos el cambio relativo
+     * en una escala centrada en 50.
+     */
+    evolution = clamp(
+      50 +
+        improvement * 500,
+    );
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Componentes                                                            */
+  /* ---------------------------------------------------------------------- */
 
   const components: IQComponent[] = [
     {
       key: "consistency",
       label: "Consistencia",
-      value: Math.round(consistency),
+      value: Math.round(
+        consistency,
+      ),
       weight: 0.2,
-      hint: "sesiones/semana",
+      hint: "actividad frente a tu histórico",
     },
     {
       key: "load",
       label: "Carga",
-      value: Math.round(load),
+      value: Math.round(
+        percentileScore(
+          currentLoad,
+          loadValues,
+          true,
+        ),
+      ),
       weight: 0.15,
-      hint: "aguda vs crónica",
+      hint: "carga frente a tu histórico",
     },
     {
       key: "pace",
       label: "Ritmo",
-      value: Math.round(pace),
+      value: Math.round(
+        pace,
+      ),
       weight: 0.15,
-      hint: "ritmo medio 28d",
+      hint: "ritmo frente a tus actividades",
     },
     {
       key: "heart",
       label: "Coste cardíaco",
-      value: Math.round(heart),
+      value: Math.round(
+        heart,
+      ),
       weight: 0.15,
-      hint: "m por latido",
+      hint: "eficiencia ritmo/FC",
     },
     {
       key: "recovery",
       label: "Recuperación",
-      value: Math.round(recovery),
+      value: Math.round(
+        recovery,
+      ),
       weight: 0.1,
-      hint: "deriva de FC",
+      hint: "carga actual frente a tu patrón",
     },
     {
       key: "volume",
       label: "Volumen",
-      value: Math.round(volume),
+      value: Math.round(
+        volume,
+      ),
       weight: 0.1,
-      hint: "km/semana",
+      hint: "kilómetros frente a tu histórico",
     },
     {
       key: "evolution",
       label: "Evolución",
-      value: Math.round(evolution),
+      value: Math.round(
+        evolution,
+      ),
       weight: 0.15,
-      hint: "tendencia 90d",
+      hint: "cambio de ritmo respecto al bloque anterior",
     },
   ];
 
   const score = Math.round(
     sum(
       components.map(
-        (c) => c.value * c.weight,
+        (component) =>
+          component.value *
+          component.weight,
       ),
     ),
   );
@@ -403,92 +758,121 @@ export interface RunnerIQ {
   level: string;
 }
 
-function levelFor(score: number): string {
-  if (score >= 90) return "Élite amateur";
-  if (score >= 80) return "Avanzado";
-  if (score >= 68) return "Intermedio alto";
-  if (score >= 55) return "Intermedio";
+function levelFor(
+  score: number,
+): string {
+  if (score >= 90)
+    return "Élite amateur";
+
+  if (score >= 80)
+    return "Avanzado";
+
+  if (score >= 68)
+    return "Intermedio alto";
+
+  if (score >= 55)
+    return "Intermedio";
+
   return "En construcción";
 }
 
 export function runnerIQ(
   acts: PieActivity[],
 ): RunnerIQ {
-  const computed = computeIQAt(
-    acts,
-    0,
-  );
+  const computed =
+    computeIQAt(
+      acts,
+      0,
+    );
 
   const now =
-    typeof computed === "number"
+    typeof computed ===
+    "number"
       ? {
           score: computed,
           components: [],
         }
       : computed;
 
-  const at = (d: number): number => {
-    const result = computeIQAt(
-      acts,
-      d,
-    );
+  const at = (
+    d: number,
+  ): number => {
+    const result =
+      computeIQAt(
+        acts,
+        d,
+      );
 
-    return typeof result === "number"
+    return typeof result ===
+      "number"
       ? result
       : result.score;
   };
 
-  const weekly = Array.from(
-    { length: 8 },
-    (_, i) => {
-      const d = (7 - i) * 7;
+  const weekly =
+    Array.from(
+      { length: 8 },
+      (_, i) => {
+        const d =
+          (7 - i) * 7;
 
-      return {
-        label: `S-${7 - i}`,
-        iq: at(d),
-      };
-    },
-  );
+        return {
+          label: `S-${7 - i}`,
+          iq: at(d),
+        };
+      },
+    );
 
-  const monthly = Array.from(
-    { length: 12 },
-    (_, i) => {
-      const d = (11 - i) * 30;
+  const monthly =
+    Array.from(
+      { length: 12 },
+      (_, i) => {
+        const d =
+          (11 - i) * 30;
 
-      const date = new Date(
-        PIE_TODAY.getTime() -
-          d * DAY,
-      );
+        const date =
+          new Date(
+            PIE_TODAY.getTime() -
+              d * DAY,
+          );
 
-      return {
-        label: date.toLocaleDateString(
-          "es-ES",
-          { month: "short" },
-        ),
-        iq: at(d),
-      };
-    },
-  );
+        return {
+          label:
+            date.toLocaleDateString(
+              "es-ES",
+              {
+                month: "short",
+              },
+            ),
+          iq: at(d),
+        };
+      },
+    );
 
-  const yearly = Array.from(
-    { length: 3 },
-    (_, i) => {
-      const yearsAgo = 2 - i;
-      const d = yearsAgo * 365;
+  const yearly =
+    Array.from(
+      { length: 3 },
+      (_, i) => {
+        const yearsAgo =
+          2 - i;
 
-      return {
-        label: String(
-          PIE_TODAY.getFullYear() -
-            yearsAgo,
-        ),
-        iq: at(d),
-      };
-    },
-  );
+        const d =
+          yearsAgo * 365;
+
+        return {
+          label: String(
+            PIE_TODAY.getFullYear() -
+              yearsAgo,
+          ),
+          iq: at(d),
+        };
+      },
+    );
 
   return {
     score: now.score,
-    components: now.components,
+    components:
+      now.components,
     deltaWeek:
       now.score - at(7),
     deltaMonth:
@@ -498,10 +882,12 @@ export function runnerIQ(
     weekly,
     monthly,
     yearly,
-    level: levelFor(now.score),
+    level:
+      levelFor(
+        now.score,
+      ),
   };
 }
-
 /* -------------------------------------------------------------------------- */
 /* Consistency                                                                */
 /* -------------------------------------------------------------------------- */
