@@ -74,14 +74,22 @@ function Dashboard() {
   const [profileName, setProfileName] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!user) return;
-    void supabase
-      .from("profiles")
-      .select("full_name")
-      .eq("id", user.id)
-      .maybeSingle()
-      .then(({ data }) => setProfileName(data?.full_name ?? null));
-  }, [user]);
+  if (!user) return;
+
+  void supabase
+    .from("profiles")
+    .select("name")
+    .eq("id", user.id)
+    .maybeSingle()
+    .then(({ data, error }) => {
+      if (error) {
+        console.error("Error cargando perfil:", error);
+        return;
+      }
+
+      setProfileName(data?.name ?? null);
+    });
+}, [user]);
 
   const fullName =
     profileName ??
