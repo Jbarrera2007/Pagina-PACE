@@ -183,10 +183,30 @@ export function AiCoach() {
         );
       }
     } catch (err) {
-      if ((err as Error).name === "AbortError") return;
-      toast.error(err instanceof Error ? err.message : "Error inesperado");
-      setMessages((m) => m.filter((msg) => msg.id !== assistantId || msg.content.length > 0));
-    } finally {
+  console.error("========== PACE IA ERROR ==========");
+  console.error("Error completo:", err);
+  console.error("Tipo:", typeof err);
+  console.error("Mensaje:", err instanceof Error ? err.message : String(err));
+  console.error("Stack:", err instanceof Error ? err.stack : "sin stack");
+  console.error("====================================");
+
+  if (err instanceof Error && err.name === "AbortError") return;
+
+  const message =
+    err instanceof Error
+      ? err.message
+      : typeof err === "string"
+        ? err
+        : JSON.stringify(err);
+
+  toast.error(message || "Error desconocido");
+
+  setMessages((m) =>
+    m.filter(
+      (msg) => msg.id !== assistantId || msg.content.length > 0,
+    ),
+  );
+} finally {
       setStreaming(false);
       abortRef.current = null;
     }
