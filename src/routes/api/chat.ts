@@ -61,7 +61,6 @@ export const Route = createFileRoute("/api/chat")({
 
 
           const openaiKey = process.env["OPENAI_API_KEY"];
-
           if (!supabaseUrl) {
             console.error(
               "Falta SUPABASE_URL",
