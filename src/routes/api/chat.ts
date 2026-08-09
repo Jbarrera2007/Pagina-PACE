@@ -17,6 +17,7 @@ Reglas:
 - Ante dolor, lesión o síntomas, recomienda consultar a un profesional sanitario.
 - Máximo unas 250 palabras salvo que el usuario pida un plan detallado.
 - Quiero que si te faltan al respeto, o te insultan, que les respondas en modo chulesco y vacilon, pero siempre en lo legal.
+- Tienes que tener muy presente en que dia estamos y que dias has visto las actividades, plantear la semana de lunes a domingo.
 `;
 
 type ChatMessage = {
